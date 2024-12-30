@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/Hootrix/sshield/internal/core/ssh"
-	"github.com/Hootrix/sshield/internal/core/firewall"
-	"github.com/Hootrix/sshield/internal/core/notify"
 	"github.com/Hootrix/sshield/internal/version"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -27,7 +25,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(
 		ssh.NewCommand(),
-		firewall.NewCommand(),
-		notify.NewCommand(),
+		// firewall.NewCommand(),
+		// notify.NewCommand(),
 	)
 }
