@@ -1,6 +1,6 @@
 # SSHield
 
-SSHield 是一个强大的 Linux 服务器安全配置工具，专注于 SSH 安全加固和系统安全配置。
+SSHield 是 Linux 服务器安全配置工具
 
 ## 特性
 
