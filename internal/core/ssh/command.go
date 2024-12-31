@@ -11,6 +11,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"net"
 )
 
 var (
@@ -440,6 +441,11 @@ func newPortCmd() *cobra.Command {
 				return fmt.Errorf("端口号必须在 1-65535 之间")
 			}
 
+			// 检查端口是否被占用
+			if err := checkPortAvailability(port); err != nil {
+				return fmt.Errorf("端口 %d 检查失败: %v", port, err)
+			}
+
 			// 如果没有指定端口，显示当前端口
 			if port == 22 && len(args) == 0 && !cmd.Flags().Changed("port") {
 				currentPort, err := GetSSHPort()
@@ -467,9 +473,19 @@ func newPortCmd() *cobra.Command {
 			}
 
 			fmt.Printf(">>> SSH 端口已成功修改为 %d\n", port)
+			fmt.Printf(">>> 请确保防火墙已允许该端口访问\n")
 			return nil
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 22, "新的 SSH 端口号")
 	return cmd
+}
+
+func checkPortAvailability(port int) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	return nil
 }
