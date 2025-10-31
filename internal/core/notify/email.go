@@ -3,9 +3,17 @@ package notify
 import (
 	"fmt"
 	"net/smtp"
-	"strings"
 	"time"
 )
+
+type EmailConfig struct {
+	To     string
+	From   string
+	Server string
+	User   string
+	Pass   string
+	Port   int
+}
 
 type EmailNotifier struct {
 	To       string
@@ -29,6 +37,23 @@ func NewEmailNotifier(config Config) *EmailNotifier {
 
 func (e *EmailNotifier) Send(event LoginEvent) error {
 	subject := fmt.Sprintf("服务器登录提醒 - %s", event.Type)
+	location := event.Location
+	if location == "" {
+		location = "-"
+	}
+	method := event.Method
+	if method == "" {
+		method = "-"
+	}
+	port := "-"
+	if event.Port > 0 {
+		port = fmt.Sprintf("%d", event.Port)
+	}
+	message := event.Message
+	if message == "" {
+		message = "(无原始日志)"
+	}
+
 	body := fmt.Sprintf(`
 服务器登录提醒
 -------------------
@@ -36,15 +61,21 @@ func (e *EmailNotifier) Send(event LoginEvent) error {
 服务器: %s
 用户: %s
 来源IP: %s
+来源端口: %s
+认证方式: %s
 位置: %s
 时间: %s
+日志: %s
 `,
 		event.Type,
 		event.Hostname,
 		event.User,
 		event.IP,
-		event.Location,
-		event.Timestamp.Format(time.RFC3339))
+		port,
+		method,
+		location,
+		event.Timestamp.Format(time.RFC3339),
+		message)
 
 	msg := fmt.Sprintf("To: %s\r\n"+
 		"From: %s\r\n"+
@@ -71,13 +102,20 @@ func (e *EmailNotifier) Test() error {
 	return e.Send(testEvent)
 }
 
-func configureEmail(email string) error {
-	// 这里需要用户提供SMTP配置
+func configureEmail(input EmailConfig) error {
 	cfg := Config{
-		Enabled:  true,
-		Type:     "email",
-		EmailTo:  email,
-		// 其他SMTP配置需要从配置文件或环境变量读取
+		Enabled:    true,
+		Type:       "email",
+		EmailTo:    input.To,
+		EmailFrom:  input.From,
+		SMTPServer: input.Server,
+		SMTPPort:   input.Port,
+		SMTPUser:   input.User,
+		SMTPPass:   input.Pass,
+	}
+
+	if err := ValidateConfig(&cfg); err != nil {
+		return err
 	}
 
 	notifier := NewEmailNotifier(cfg)

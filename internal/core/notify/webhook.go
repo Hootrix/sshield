@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -105,23 +106,53 @@ func (w *WebhookNotifier) Test() error {
 
 // formatLoginMessage formats the login event message
 func formatLoginMessage(event LoginEvent) string {
+	location := event.Location
+	if location == "" {
+		location = "-"
+	}
+
+	method := event.Method
+	if method == "" {
+		method = "-"
+	}
+
+	port := "-"
+	if event.Port > 0 {
+		port = fmt.Sprintf("%d", event.Port)
+	}
+
+	message := event.Message
+	if message == "" {
+		message = "(无原始日志)"
+	}
+
 	return fmt.Sprintf(`服务器登录提醒
 事件类型: %s
 服务器: %s
 用户: %s
 来源IP: %s
-位置: %s
-时间: %s`,
+ 来源端口: %s
+ 认证方式: %s
+ 位置: %s
+ 时间: %s
+ 日志: %s`,
 		event.Type,
 		event.Hostname,
 		event.User,
 		event.IP,
-		event.Location,
-		event.Timestamp.Format(time.RFC3339))
+		port,
+		method,
+		location,
+		event.Timestamp.Format(time.RFC3339),
+		message)
 }
 
 // configureWebhook configures and tests the webhook notification
-func configureWebhook(url string) error {
+func configureWebhook(url string, insecure bool) error {
+	if !insecure && strings.HasPrefix(url, "http://") {
+		return fmt.Errorf("请使用 HTTPS Webhook，或显式添加 --insecure 允许 HTTP")
+	}
+
 	// 创建配置管理器
 	cm := NewConfigManager()
 
