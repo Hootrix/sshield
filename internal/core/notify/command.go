@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,7 +15,7 @@ import (
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "notify",
-		Short: "Manage login notification and monitoring",
+		Short: "管理登录通知与监控",
 	}
 
 	cmd.AddCommand(
@@ -35,14 +36,14 @@ func newWebhookCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "webhook",
-		Short: "Configure webhook notification",
+		Short: "配置 Webhook 通知",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return configureWebhook(url, insecure)
 		},
 	}
 
-	cmd.Flags().StringVarP(&url, "url", "u", "", "Webhook target URL")
-	cmd.Flags().BoolVar(&insecure, "insecure", false, "Allow insecure HTTP webhook (not recommended)")
+	cmd.Flags().StringVarP(&url, "url", "u", "", "Webhook 目标地址")
+	cmd.Flags().BoolVar(&insecure, "insecure", false, "允许使用不安全的 HTTP Webhook（不推荐）")
 	_ = cmd.MarkFlagRequired("url")
 
 	return cmd
@@ -60,7 +61,7 @@ func newEmailCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "email",
-		Short: "Configure SMTP email notification",
+		Short: "配置 SMTP 邮件通知",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := EmailConfig{
 				To:     to,
@@ -74,12 +75,12 @@ func newEmailCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&to, "to", "t", "", "Recipient email address")
-	cmd.Flags().StringVarP(&from, "from", "f", "", "Sender email address")
-	cmd.Flags().StringVar(&server, "server", "", "SMTP server host")
-	cmd.Flags().StringVarP(&user, "user", "u", "", "SMTP username")
-	cmd.Flags().StringVarP(&pass, "password", "p", "", "SMTP password")
-	cmd.Flags().IntVar(&port, "port", 587, "SMTP server port")
+	cmd.Flags().StringVarP(&to, "to", "t", "", "收件人邮箱地址")
+	cmd.Flags().StringVarP(&from, "from", "f", "", "发件人邮箱地址")
+	cmd.Flags().StringVar(&server, "server", "", "SMTP 服务器主机名")
+	cmd.Flags().StringVarP(&user, "user", "u", "", "SMTP 用户名")
+	cmd.Flags().StringVarP(&pass, "password", "p", "", "SMTP 密码")
+	cmd.Flags().IntVar(&port, "port", 587, "SMTP 服务器端口")
 
 	_ = cmd.MarkFlagRequired("to")
 	_ = cmd.MarkFlagRequired("from")
@@ -97,11 +98,12 @@ func newWatchCmd() *cobra.Command {
 		source    string
 		units     []string
 		logs      []string
+		timezone  string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "watch",
-		Short: "Continuously monitor SSH logins and send notifications",
+		Short: "持续监控 SSH 登录并发送通知",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stateFile == "" {
 				var err error
@@ -121,22 +123,29 @@ func newWatchCmd() *cobra.Command {
 				cancel()
 			}()
 
+			loc, err := resolveLocation(timezone)
+			if err != nil {
+				return err
+			}
+
 			opts := WatchOptions{
 				CursorPath:   stateFile,
 				PollTimeout:  poll,
 				Source:       source,
 				JournalUnits: units,
 				LogPaths:     logs,
+				DisplayLoc:   loc,
 			}
 			return RunWatch(ctx, opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&stateFile, "state-file", "", "Path to store journal cursor (default auto)")
-	cmd.Flags().DurationVar(&poll, "poll", 5*time.Second, "Journal wait timeout")
-	cmd.Flags().StringVar(&source, "source", "auto", "Event source: auto|journal|file")
-	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "Journal unit name to watch (repeatable)")
-	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "Auth log file path to follow (repeatable)")
+	cmd.Flags().StringVar(&stateFile, "state-file", "", "保存日志游标的路径（默认自动选择）")
+	cmd.Flags().DurationVar(&poll, "poll", 5*time.Second, "等待新日志事件的超时时间")
+	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file")
+	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要监听的 Journal 单元名（可重复）")
+	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要跟踪的认证日志路径（可重复）")
+	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'）")
 
 	return cmd
 }
@@ -148,11 +157,12 @@ func newSweepCmd() *cobra.Command {
 		source    string
 		units     []string
 		logs      []string
+		timezone  string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "sweep",
-		Short: "Process recent SSH login events once and exit",
+		Short: "一次性处理近期 SSH 登录事件后退出",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stateFile == "" {
 				var err error
@@ -165,22 +175,29 @@ func newSweepCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
+			loc, err := resolveLocation(timezone)
+			if err != nil {
+				return err
+			}
+
 			opts := SweepOptions{
 				CursorPath:   stateFile,
 				Since:        since,
 				Source:       source,
 				JournalUnits: units,
 				LogPaths:     logs,
+				DisplayLoc:   loc,
 			}
 			return RunSweep(ctx, opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&stateFile, "state-file", "", "Path to store journal cursor (default auto)")
-	cmd.Flags().DurationVar(&since, "since", 5*time.Minute, "Process events newer than duration if no cursor is stored")
-	cmd.Flags().StringVar(&source, "source", "auto", "Event source: auto|journal|file")
-	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "Journal unit name to scan (repeatable)")
-	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "Auth log file path to scan (repeatable)")
+	cmd.Flags().StringVar(&stateFile, "state-file", "", "保存日志游标的路径（默认自动选择）")
+	cmd.Flags().DurationVar(&since, "since", 1*time.Hour, "当没有保存游标时处理该时长内的事件")
+	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file")
+	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要扫描的 Journal 单元名（可重复）")
+	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要扫描的认证日志路径（可重复）")
+	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'）")
 
 	return cmd
 }
@@ -188,7 +205,7 @@ func newSweepCmd() *cobra.Command {
 func newTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test",
-		Short: "Send a test notification using current configuration",
+		Short: "使用当前配置发送测试通知",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return testNotification()
 		},
@@ -198,7 +215,7 @@ func newTestCmd() *cobra.Command {
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show current notification configuration",
+		Short: "查看当前通知配置",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -212,4 +229,19 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func resolveLocation(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "local") {
+		return time.Local, nil
+	}
+	if strings.EqualFold(name, "utc+8") {
+		return time.FixedZone("UTC+8", 8*3600), nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("无法识别的时区 %q: %w", name, err)
+	}
+	return loc, nil
 }
