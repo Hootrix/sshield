@@ -41,6 +41,7 @@ type WatchOptions struct {
 	JournalUnits []string
 	LogPaths     []string
 	PollTimeout  time.Duration
+	DisplayLoc   *time.Location
 }
 
 // SweepOptions 控制 sweep 模式行为
@@ -50,6 +51,7 @@ type SweepOptions struct {
 	JournalUnits []string
 	LogPaths     []string
 	Since        time.Duration
+	DisplayLoc   *time.Location
 }
 
 type sourceSelection struct {
@@ -75,18 +77,19 @@ func RunWatch(ctx context.Context, opts WatchOptions) error {
 		return err
 	}
 
-	selection, err := determineSource(opts.Source, opts.JournalUnits, opts.LogPaths)
+	selection, err := determineSource(opts.Source, opts.JournalUnits, opts.LogPaths, state, 0, true)
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf(">>> 监听模式：%s\n", selection.Description)
+	loc := normalizeLocation(opts.DisplayLoc)
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, opts.PollTimeout, true, 0)
+		return runJournal(ctx, store, state, selection.Units, opts.PollTimeout, true, 0, loc)
 	case sourceFile:
-		return followLogFile(ctx, store, state, selection.LogPath, opts.PollTimeout)
+		return followLogFile(ctx, store, state, selection.LogPath, opts.PollTimeout, loc)
 	default:
 		return fmt.Errorf("未知监听源: %s", selection.Source)
 	}
@@ -104,33 +107,32 @@ func RunSweep(ctx context.Context, opts SweepOptions) error {
 		return err
 	}
 
-	selection, err := determineSource(opts.Source, opts.JournalUnits, opts.LogPaths)
+	selection, err := determineSource(opts.Source, opts.JournalUnits, opts.LogPaths, state, opts.Since, false)
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf(">>> 扫描模式：%s\n", selection.Description)
+	loc := normalizeLocation(opts.DisplayLoc)
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, 0, false, opts.Since)
+		return runJournal(ctx, store, state, selection.Units, 0, false, opts.Since, loc)
 	case sourceFile:
-		return sweepLogFile(ctx, store, state, selection.LogPath)
+		return sweepLogFile(ctx, store, state, selection.LogPath, opts.Since, loc)
 	default:
 		return fmt.Errorf("未知监听源: %s", selection.Source)
 	}
 }
 
-func determineSource(source string, units, paths []string) (*sourceSelection, error) {
+func determineSource(source string, units, paths []string, state *SourceState, since time.Duration, follow bool) (*sourceSelection, error) {
 	s := &sourceSelection{}
 
 	if len(units) == 0 {
-		units = make([]string, len(defaultJournalUnits))
-		copy(units, defaultJournalUnits)
+		units = append([]string{}, defaultJournalUnits...)
 	}
 	if len(paths) == 0 {
-		paths = make([]string, len(defaultLogPaths))
-		copy(paths, defaultLogPaths)
+		paths = append([]string{}, defaultLogPaths...)
 	}
 
 	source = strings.ToLower(strings.TrimSpace(source))
@@ -138,7 +140,8 @@ func determineSource(source string, units, paths []string) (*sourceSelection, er
 		source = sourceAuto
 	}
 
-	journalOK, journalHasEntries := probeJournal(units)
+	journalOK, journalCount := probeJournal(units, state, since)
+	journalRecent := journalCount > 0
 	logPath, logExists := firstExisting(paths)
 
 	switch source {
@@ -159,26 +162,42 @@ func determineSource(source string, units, paths []string) (*sourceSelection, er
 		s.Description = fmt.Sprintf("文件日志：%s", logPath)
 		return s, nil
 	case sourceAuto:
-		if journalOK && (journalHasEntries || !logExists) {
-			s.Source = sourceJournal
-			s.Units = units
-			s.Description = fmt.Sprintf("journald（units=%v）", units)
-			if !journalHasEntries {
-				s.Description += "，尚无历史记录"
+		if follow {
+			if journalOK {
+				s.Source = sourceJournal
+				s.Units = units
+				desc := fmt.Sprintf("journald（units=%v）", units)
+				if !journalRecent {
+					desc += "，等待新事件"
+				}
+				s.Description = desc
+				return s, nil
 			}
-			return s, nil
-		}
-		if logExists {
-			s.Source = sourceFile
-			s.LogPath = logPath
-			s.Description = fmt.Sprintf("文件日志：%s", logPath)
-			return s, nil
-		}
-		if journalOK {
-			s.Source = sourceJournal
-			s.Units = units
-			s.Description = fmt.Sprintf("journald（units=%v）", units)
-			return s, nil
+			if logExists {
+				s.Source = sourceFile
+				s.LogPath = logPath
+				s.Description = fmt.Sprintf("文件日志：%s", logPath)
+				return s, nil
+			}
+		} else {
+			if journalOK && journalRecent {
+				s.Source = sourceJournal
+				s.Units = units
+				s.Description = fmt.Sprintf("journald（units=%v，命中近期事件）", units)
+				return s, nil
+			}
+			if logExists {
+				s.Source = sourceFile
+				s.LogPath = logPath
+				s.Description = fmt.Sprintf("文件日志：%s", logPath)
+				return s, nil
+			}
+			if journalOK {
+				s.Source = sourceJournal
+				s.Units = units
+				s.Description = fmt.Sprintf("journald（units=%v，无匹配事件）", units)
+				return s, nil
+			}
 		}
 		return nil, fmt.Errorf("未检测到可用的日志源（journalctl 不可用，且未找到 %v）", paths)
 	default:
@@ -186,34 +205,58 @@ func determineSource(source string, units, paths []string) (*sourceSelection, er
 	}
 }
 
-func probeJournal(units []string) (available bool, hasEntries bool) {
+func probeJournal(units []string, state *SourceState, since time.Duration) (bool, int) {
 	if _, err := exec.LookPath("journalctl"); err != nil {
-		return false, false
+		return false, 0
 	}
 
-	args := []string{"--no-pager", "-n", "50"}
+	args := []string{"--no-pager", "-n", "200", "-o", "json"}
+	if state != nil && state.JournalCursor != "" && since <= 0 {
+		args = append(args, "--after-cursor", state.JournalCursor)
+	} else {
+		window := since
+		if window <= 0 {
+			window = 30 * time.Minute
+		}
+		t := time.Now().Add(-window).Format("2006-01-02 15:04:05")
+		args = append(args, "--since", t)
+	}
 	for _, unit := range units {
 		args = append(args, "-u", unit)
 	}
 
 	cmd := exec.Command("journalctl", args...)
-	output, err := cmd.CombinedOutput()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return false, false
+		return false, 0
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return false, 0
 	}
 
-	trimmed := bytes.TrimSpace(output)
-	if len(trimmed) == 0 {
-		return true, false
+	scanner := bufio.NewScanner(stdout)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	count := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var record journalRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			continue
+		}
+		ts := parseRealtime(record.RealtimeTS)
+		if _, ok := parseJournalMessage(record.Message, record.Hostname, ts); ok {
+			count++
+			break
+		}
 	}
-	if bytes.Contains(trimmed, []byte("-- No entries --")) {
-		return true, false
-	}
-	// journalctl 输出涵盖多行头信息，包含 "sshd" 视为有记录
-	if bytes.Contains(bytes.ToLower(trimmed), []byte("sshd")) || bytes.Contains(bytes.ToLower(trimmed), []byte("ssh")) {
-		return true, true
-	}
-	return true, false
+	_ = cmd.Wait()
+	return true, count
 }
 
 func firstExisting(paths []string) (string, bool) {
@@ -228,7 +271,7 @@ func firstExisting(paths []string) (string, bool) {
 	return "", false
 }
 
-func runJournal(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration) error {
+func runJournal(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration, loc *time.Location) error {
 	if state == nil {
 		state = &SourceState{}
 	}
@@ -241,11 +284,11 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 		args = append(args, "-u", unit)
 	}
 
-	if state.JournalCursor != "" {
-		args = append(args, "--after-cursor", state.JournalCursor)
-	} else if !follow && since > 0 {
+	if !follow && since > 0 {
 		sinceTime := time.Now().Add(-since).Format("2006-01-02 15:04:05")
 		args = append(args, "--since", sinceTime)
+	} else if state.JournalCursor != "" {
+		args = append(args, "--after-cursor", state.JournalCursor)
 	} else if follow {
 		args = append(args, "--since", "now")
 	}
@@ -298,7 +341,7 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 			log.Printf("发送通知失败: %v", err)
 		}
 
-		printEventSummary(*event)
+		printEventSummary(*event, loc)
 
 		state.JournalCursor = record.Cursor
 		if err := store.Save(state); err != nil {
@@ -323,7 +366,7 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 	return cmd.Wait()
 }
 
-func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, poll time.Duration) error {
+func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, poll time.Duration, loc *time.Location) error {
 	if poll <= 0 {
 		poll = time.Second
 	}
@@ -337,7 +380,7 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 		if err := dispatchEvent(event); err != nil {
 			log.Printf("发送通知失败: %v", err)
 		}
-		printEventSummary(*event)
+		printEventSummary(*event, loc)
 		offset = newOffset
 		state.FileOffsets[path] = offset
 		if err := store.Save(state); err != nil {
@@ -363,19 +406,35 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 	}
 }
 
-func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string) error {
+func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, since time.Duration, loc *time.Location) error {
 	offset := state.FileOffsets[path]
-	var latest int64 = offset
+	startOffset := offset
+	cutoff := time.Time{}
+	if since > 0 {
+		startOffset = 0
+		cutoff = time.Now().Add(-since)
+	}
+
+	latest := offset
 	process := func(event *LoginEvent, newOffset int64) {
+		if newOffset > latest {
+			latest = newOffset
+		}
+		if !cutoff.IsZero() && event.Timestamp.Before(cutoff) {
+			return
+		}
 		if err := dispatchEvent(event); err != nil {
 			log.Printf("发送通知失败: %v", err)
 		}
-		printEventSummary(*event)
-		latest = newOffset
+		printEventSummary(*event, loc)
 	}
-	_, err := readLogFile(ctx, path, offset, process, false, 0)
+
+	finalOffset, err := readLogFile(ctx, path, startOffset, process, false, 0)
 	if err != nil {
 		return err
+	}
+	if finalOffset > latest {
+		latest = finalOffset
 	}
 	state.FileOffsets[path] = latest
 	return store.Save(state)
@@ -496,6 +555,12 @@ func dispatchEvent(event *LoginEvent) error {
 	return notifier.Send(*event)
 }
 
+func normalizeLocation(loc *time.Location) *time.Location {
+	if loc == nil {
+		return time.Local
+	}
+	return loc
+}
 func buildNotifier(cfg Config) (Notifier, error) {
 	switch strings.ToLower(cfg.Type) {
 	case "webhook":
@@ -507,7 +572,11 @@ func buildNotifier(cfg Config) (Notifier, error) {
 	}
 }
 
-func printEventSummary(event LoginEvent) {
+func printEventSummary(event LoginEvent, loc *time.Location) {
+	if loc == nil {
+		loc = time.Local
+	}
+
 	method := event.Method
 	if method == "" {
 		method = "-"
@@ -518,8 +587,10 @@ func printEventSummary(event LoginEvent) {
 		port = fmt.Sprintf("%d", event.Port)
 	}
 
+	displayTime := event.Timestamp.In(loc).Format("2006-01-02 15:04:05 -07:00")
+
 	fmt.Fprintf(os.Stdout, "[%s] %s 用户=%s IP=%s 端口=%s 方式=%s 主机=%s\n",
-		event.Timestamp.Format(time.RFC3339),
+		displayTime,
 		event.Type,
 		event.User,
 		event.IP,
