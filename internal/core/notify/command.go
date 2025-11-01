@@ -141,11 +141,11 @@ func newWatchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&stateFile, "state-file", "", "保存日志游标的路径（默认自动选择）")
-	cmd.Flags().DurationVar(&poll, "poll", 5*time.Second, "等待新日志事件的超时时间")
-	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file")
-	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要监听的 Journal 单元名（可重复）")
-	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要跟踪的认证日志路径（可重复）")
-	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'）")
+	cmd.Flags().DurationVar(&poll, "poll", 5*time.Second, "等待新日志事件的超时时间（默认 5s）")
+	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file（默认 auto）")
+	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要监听的 Journal 单元名（可重复，默认 sshd.service｜ssh.service）")
+	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要跟踪的认证日志路径（可重复，默认 /var/log/auth.log、/var/log/secure）")
+	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'，默认 Asia/Shanghai）")
 
 	return cmd
 }
@@ -193,11 +193,11 @@ func newSweepCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&stateFile, "state-file", "", "保存日志游标的路径（默认自动选择）")
-	cmd.Flags().DurationVar(&since, "since", 1*time.Hour, "当没有保存游标时处理该时长内的事件")
-	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file")
-	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要扫描的 Journal 单元名（可重复）")
-	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要扫描的认证日志路径（可重复）")
-	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'）")
+	cmd.Flags().DurationVar(&since, "since", 1*time.Hour, "检查时间范围（默认 1h）")
+	cmd.Flags().StringVar(&source, "source", "auto", "事件来源：auto｜journal｜file（默认 auto）")
+	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要扫描的 Journal 单元名（可重复，默认 sshd.service｜ssh.service）")
+	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要扫描的 SSH 认证日志路径（可重复，默认 /var/log/auth.log、/var/log/secure）")
+	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'，默认 Asia/Shanghai）")
 
 	return cmd
 }
