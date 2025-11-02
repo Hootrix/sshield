@@ -25,6 +25,7 @@ type LoginEvent struct {
 	Timestamp time.Time // 事件时间
 	Hostname  string    // 主机名
 	Location  string    // IP地理位置（可选）
+	LogPath   string    // 日志来源路径（文件路径或 journald 单元）
 	Message   string    // 原始日志消息
 }
 

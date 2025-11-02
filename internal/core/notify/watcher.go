@@ -35,6 +35,7 @@ type journalRecord struct {
 	Message    string `json:"MESSAGE"`
 	Hostname   string `json:"_HOSTNAME"`
 	RealtimeTS string `json:"__REALTIME_TIMESTAMP"`
+	Unit       string `json:"_SYSTEMD_UNIT"`
 }
 
 // WatchOptions 控制 watch 模式行为
@@ -355,6 +356,16 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 		}
 		skipHistorical = false
 
+		logSource := record.Unit
+		if logSource == "" {
+			logSource = strings.Join(units, ",")
+		}
+		if logSource != "" {
+			event.LogPath = fmt.Sprintf("journald:%s", logSource)
+		} else {
+			event.LogPath = "journald"
+		}
+
 		if notify {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
@@ -403,6 +414,7 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 	}
 
 	process := func(event *LoginEvent, newOffset int64) {
+		event.LogPath = path
 		if err := dispatchEvent(event); err != nil {
 			log.Printf("发送通知失败: %v", err)
 		}
@@ -449,6 +461,7 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 		if !cutoff.IsZero() && event.Timestamp.Before(cutoff) {
 			return
 		}
+		event.LogPath = path
 		if notify {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
@@ -587,7 +600,7 @@ func dispatchEvent(event *LoginEvent) error {
 
 func normalizeLocation(loc *time.Location) *time.Location {
 	if loc == nil {
-		return time.Local
+		return shanghaiLocation
 	}
 	return loc
 }
@@ -604,7 +617,7 @@ func buildNotifier(cfg Config) (Notifier, error) {
 
 func printEventSummary(event LoginEvent, loc *time.Location) {
 	if loc == nil {
-		loc = time.Local
+		loc = shanghaiLocation
 	}
 
 	method := event.Method
@@ -618,8 +631,12 @@ func printEventSummary(event LoginEvent, loc *time.Location) {
 	}
 
 	displayTime := event.Timestamp.In(loc).Format("2006-01-02 15:04:05 -07:00")
+	logPath := event.LogPath
+	if strings.TrimSpace(logPath) == "" {
+		logPath = "-"
+	}
 
-	fmt.Fprintf(os.Stdout, "[%s] %s 用户=%s IP=%s 端口=%s 方式=%s 主机=%s\n",
+	fmt.Fprintf(os.Stdout, "[%s] %s 用户=%s IP=%s 端口=%s 方式=%s 主机=%s 日志路径=%s\n",
 		displayTime,
 		event.Type,
 		event.User,
@@ -627,5 +644,6 @@ func printEventSummary(event LoginEvent, loc *time.Location) {
 		port,
 		method,
 		event.Hostname,
+		logPath,
 	)
 }

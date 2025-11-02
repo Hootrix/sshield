@@ -35,6 +35,7 @@ func testNotification() error {
 		Timestamp: time.Now(),
 		Hostname:  hostname,
 		Message:   "test notification",
+		LogPath:   "-",
 	}
 
 	return notifier.Send(event)

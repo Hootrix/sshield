@@ -37,6 +37,8 @@ sshield notify email --to ops@example.com --from ssh@example.com --server smtp.e
 sshield notify test                      # 发送测试通知
 sshield notify status                    # 查看当前通知配置
 
+> 提示：通知消息默认使用 Asia/Shanghai 时区并附带日志来源路径，便于排查。
+
 # 登录事件监听
 sshield ssh watch                        # 实时监听 SSH 登录并发送通知（推荐 systemd service）
 sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（默认仅输出）

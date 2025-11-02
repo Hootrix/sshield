@@ -94,7 +94,7 @@ func parseAuthLogLine(line string) (*LoginEvent, bool) {
 	now := time.Now()
 	layout := "Jan 2 15:04:05 2006"
 	timestampStr := fmt.Sprintf("%s %d %s %d", month, day, clock, now.Year())
-	ts, err := time.ParseInLocation(layout, timestampStr, time.Local)
+	ts, err := time.ParseInLocation(layout, timestampStr, shanghaiLocation)
 	if err != nil {
 		return nil, false
 	}

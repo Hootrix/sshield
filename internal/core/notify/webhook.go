@@ -95,6 +95,7 @@ func (w *WebhookNotifier) Test() error {
 		Timestamp: time.Now(),
 		Hostname:  "test_host",
 		Location:  "Test Location",
+		LogPath:   "-",
 	}
 
 	if err := w.Send(testEvent); err != nil {
@@ -126,16 +127,23 @@ func formatLoginMessage(event LoginEvent) string {
 		message = "(无原始日志)"
 	}
 
+	logPath := strings.TrimSpace(event.LogPath)
+	if logPath == "" {
+		logPath = "-"
+	}
+	timestamp := formatShanghaiRFC3339(event.Timestamp)
+
 	return fmt.Sprintf(`服务器登录提醒
 事件类型: %s
 服务器: %s
 用户: %s
 来源IP: %s
- 来源端口: %s
- 认证方式: %s
- 位置: %s
- 时间: %s
- 日志: %s`,
+来源端口: %s
+认证方式: %s
+位置: %s
+时间: %s
+日志路径: %s
+日志: %s`,
 		event.Type,
 		event.Hostname,
 		event.User,
@@ -143,7 +151,8 @@ func formatLoginMessage(event LoginEvent) string {
 		port,
 		method,
 		location,
-		event.Timestamp.Format(time.RFC3339),
+		timestamp,
+		logPath,
 		message)
 }
 

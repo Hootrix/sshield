@@ -293,7 +293,7 @@ func newStatusCmd() *cobra.Command {
 func resolveLocation(name string) (*time.Location, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.EqualFold(name, "local") {
-		return time.Local, nil
+		return shanghaiLocation, nil
 	}
 	if strings.EqualFold(name, "utc+8") {
 		return time.FixedZone("UTC+8", 8*3600), nil

@@ -57,6 +57,12 @@ func (e *EmailNotifier) Send(event LoginEvent) error {
 		message = "(无原始日志)"
 	}
 
+	logPath := strings.TrimSpace(event.LogPath)
+	if logPath == "" {
+		logPath = "-"
+	}
+	timestamp := formatShanghaiRFC3339(event.Timestamp)
+
 	body := fmt.Sprintf(`
 服务器登录提醒
 -------------------
@@ -68,6 +74,7 @@ func (e *EmailNotifier) Send(event LoginEvent) error {
 认证方式: %s
 位置: %s
 时间: %s
+日志路径: %s
 日志: %s
 `,
 		event.Type,
@@ -77,7 +84,8 @@ func (e *EmailNotifier) Send(event LoginEvent) error {
 		port,
 		method,
 		location,
-		event.Timestamp.Format(time.RFC3339),
+		timestamp,
+		logPath,
 		message)
 
 	msg := fmt.Sprintf("To: %s\r\n"+
@@ -109,6 +117,7 @@ func (e *EmailNotifier) Test() error {
 		Timestamp: time.Now(),
 		Hostname:  "test_host",
 		Location:  "Test Location",
+		LogPath:   "-",
 	}
 	return e.Send(testEvent)
 }
