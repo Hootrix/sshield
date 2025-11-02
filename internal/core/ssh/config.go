@@ -602,52 +602,48 @@ func GetPasswordAuthStatus() (bool, error) {
 	}
 
 	lines := strings.Split(string(content), "\n")
-	passwordAuthFound := false
+	passwordSet := false
+	passwordEnabled := true // OpenSSH 默认启用密码登录
+	challengeSet := false
+	challengeEnabled := false
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			continue // 跳过注释行
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
 
-		// 处理行尾注释
 		if idx := strings.Index(line, "#"); idx != -1 {
 			line = strings.TrimSpace(line[:idx])
 		}
 
-		if strings.HasPrefix(line, "PasswordAuthentication") {
-			passwordAuthFound = true
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return strings.ToLower(parts[1]) == "yes", nil
-			}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		key := strings.ToLower(fields[0])
+		value := strings.ToLower(fields[1])
+
+		switch key {
+		case "passwordauthentication":
+			passwordSet = true
+			passwordEnabled = value == "yes"
+		case "challengeresponseauthentication":
+			challengeSet = true
+			challengeEnabled = value == "yes"
 		}
 	}
 
-	// 如果找不到配置项，检查是否有 ChallengeResponseAuthentication
-	if !passwordAuthFound {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "#") {
-				continue
-			}
-
-			// 处理行尾注释
-			if idx := strings.Index(line, "#"); idx != -1 {
-				line = strings.TrimSpace(line[:idx])
-			}
-
-			if strings.HasPrefix(line, "ChallengeResponseAuthentication") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					return strings.ToLower(parts[1]) == "yes", nil
-				}
-			}
-		}
+	if passwordSet {
+		return passwordEnabled, nil
 	}
 
-	// 如果都找不到配置项，返回默认值 false（更安全的选择）
-	return false, nil
+	if challengeSet {
+		return challengeEnabled, nil
+	}
+
+	return true, nil
 }
 
 // GetPubKeyAuthStatus 获取密钥认证状态

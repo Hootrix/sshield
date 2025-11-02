@@ -162,7 +162,7 @@ func NewSweepCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "sweep",
-		Short: "单次检查SSH登录事件",
+		Short: "单次检查最近SSH登录",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stateFile == "" {
 				var err error
