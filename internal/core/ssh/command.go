@@ -2,12 +2,14 @@ package ssh
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/Hootrix/sshield/internal/core/notify"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -29,6 +31,8 @@ func NewCommand() *cobra.Command {
 		newPasswordLoginCmd(),
 		newChangePasswordCmd(),
 		newPortCmd(),
+		notify.NewWatchCommand(),
+		notify.NewSweepCommand(),
 	)
 
 	return cmd
@@ -406,7 +410,10 @@ func newChangePasswordCmd() *cobra.Command {
 }
 
 func newPortCmd() *cobra.Command {
-	var port int
+	var (
+		port int
+		yes  bool
+	)
 	cmd := &cobra.Command{
 		Use:   "port [端口号]",
 		Short: "修改 SSH 端口",
@@ -440,6 +447,11 @@ func newPortCmd() *cobra.Command {
 				return fmt.Errorf("端口号必须在 1-65535 之间")
 			}
 
+			// 检查端口是否被占用
+			if err := checkPortAvailability(port); err != nil {
+				return fmt.Errorf("端口 %d 检查失败: %v", port, err)
+			}
+
 			// 如果没有指定端口，显示当前端口
 			if port == 22 && len(args) == 0 && !cmd.Flags().Changed("port") {
 				currentPort, err := GetSSHPort()
@@ -453,12 +465,14 @@ func newPortCmd() *cobra.Command {
 			}
 
 			// 确认修改
-			fmt.Printf(">>> 确定要将 SSH 端口修改为 %d 吗？[y/N] ", port)
-			var confirm string
-			fmt.Scanln(&confirm)
-			if confirm != "y" && confirm != "Y" {
-				fmt.Println(">>> 已取消端口修改")
-				return nil
+			if !yes {
+				fmt.Printf(">>> 确定要将 SSH 端口修改为 %d 吗？[y/N] ", port)
+				var confirm string
+				fmt.Scanln(&confirm)
+				if confirm != "y" && confirm != "Y" {
+					fmt.Println(">>> 已取消端口修改")
+					return nil
+				}
 			}
 
 			// 修改端口
@@ -467,9 +481,20 @@ func newPortCmd() *cobra.Command {
 			}
 
 			fmt.Printf(">>> SSH 端口已成功修改为 %d\n", port)
+			fmt.Printf(">>> 请确保防火墙已允许该端口访问\n")
 			return nil
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 22, "新的 SSH 端口号")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "无需二次确认，直接修改端口")
 	return cmd
+}
+
+func checkPortAvailability(port int) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	return nil
 }

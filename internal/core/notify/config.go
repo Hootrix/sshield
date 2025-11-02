@@ -5,12 +5,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
-	configDir  = "/etc/sshield"
-	configFile = "notify.json"
+	systemConfigDir  = "/etc/sshield"
+	configFile       = "notify.json"
+	defaultStateRoot = "/var/lib/sshield"
 )
+
+func resolveConfigPath() (string, error) {
+	userConfigDir, err := os.UserConfigDir()
+	if err != nil || userConfigDir == "" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil || home == "" {
+			return "", fmt.Errorf("failed to resolve user config directory: %w", firstErr(err, homeErr))
+		}
+		userConfigDir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(userConfigDir, "sshield", configFile), nil
+}
+
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("unknown error")
+}
 
 // ConfigManager 配置管理器
 type ConfigManager struct {
@@ -19,8 +42,14 @@ type ConfigManager struct {
 
 // NewConfigManager 创建配置管理器
 func NewConfigManager() *ConfigManager {
+	path, err := resolveConfigPath()
+	if err != nil {
+		return &ConfigManager{
+			configPath: filepath.Join(systemConfigDir, configFile),
+		}
+	}
 	return &ConfigManager{
-		configPath: filepath.Join(configDir, configFile),
+		configPath: path,
 	}
 }
 
@@ -31,8 +60,13 @@ func (cm *ConfigManager) SaveConfig(cfg Config) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	// 确保配置目录存在
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	dir := filepath.Dir(cm.configPath)
+	perm := os.FileMode(0700)
+	if os.Geteuid() == 0 {
+		perm = 0755
+	}
+
+	if err := os.MkdirAll(dir, perm); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -42,7 +76,7 @@ func (cm *ConfigManager) SaveConfig(cfg Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(cm.configPath, data, 0644); err != nil {
+	if err := os.WriteFile(cm.configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -119,63 +153,36 @@ func (cm *ConfigManager) configExists() bool {
 }
 
 func saveConfig(cfg Config) error {
-	// 确保配置目录存在
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("create config directory failed: %v", err)
-	}
-
-	// 将配置写入文件
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config failed: %v", err)
-	}
-
-	configPath := filepath.Join(configDir, configFile)
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("write config file failed: %v", err)
-	}
-
-	return nil
+	manager := NewConfigManager()
+	return manager.SaveConfig(cfg)
 }
 
-func loadConfig() (Config, error) {
-	var cfg Config
-	configPath := filepath.Join(configDir, configFile)
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
-		return cfg, fmt.Errorf("read config file failed: %v", err)
-	}
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("unmarshal config failed: %v", err)
-	}
-
-	return cfg, nil
+func loadConfig() (*Config, error) {
+	manager := NewConfigManager()
+	return manager.LoadConfig()
 }
 
-func testNotification() error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return fmt.Errorf("load config failed: %v", err)
+func printConfigSummary(cfg *Config) {
+	if cfg == nil {
+		fmt.Println("未找到通知配置。")
+		return
 	}
 
-	if !cfg.Enabled {
-		return fmt.Errorf("notification is not enabled")
+	fmt.Println("通知配置：")
+	status := "禁用"
+	if cfg.Enabled {
+		status = "启用"
 	}
-
-	var notifier Notifier
-	switch cfg.Type {
+	fmt.Printf("  状态：%s\n", status)
+	fmt.Printf("  类型：%s\n", strings.ToUpper(cfg.Type))
+	switch strings.ToLower(cfg.Type) {
 	case "webhook":
-		notifier = NewWebhookNotifier(cfg.WebhookURL)
+		fmt.Printf("  Webhook：%s\n", cfg.WebhookURL)
 	case "email":
-		notifier = NewEmailNotifier(cfg)
+		fmt.Printf("  收件人：%s\n", cfg.EmailTo)
+		fmt.Printf("  发件人：%s\n", cfg.EmailFrom)
+		fmt.Printf("  SMTP：%s:%d\n", cfg.SMTPServer, cfg.SMTPPort)
 	default:
-		return fmt.Errorf("unknown notification type: %s", cfg.Type)
+		fmt.Println("  未知类型。")
 	}
-
-	return notifier.Test()
 }

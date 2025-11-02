@@ -24,9 +24,18 @@ const (
 	// KeyTypeRSA 使用RSA算法（用于兼容旧系统）
 	KeyTypeRSA KeyType = "rsa"
 
-	sshConfigPath  = "/etc/ssh/sshd_config"
-	defaultKeyPath = "~/.ssh/id_rsa"
+	sshConfigPath    = "/etc/ssh/sshd_config"
+	defaultKeyPath   = "~/.ssh/id_rsa"
+	portDropInFile   = "99-sshield-port.conf"
+	portDropInHeader = "# Managed by sshield"
 )
+
+func debugf(format string, args ...interface{}) {
+	if os.Getenv("SSHIELD_DEBUG") == "" {
+		return
+	}
+	fmt.Printf("[sshield-debug] "+format+"\n", args...)
+}
 
 // KeyTypeConfig 定义密钥生成的配置
 type KeyTypeConfig struct {
@@ -180,19 +189,70 @@ func prepareKeyAuth(email string, config KeyTypeConfig) error {
 	return nil
 }
 
-// getRestartCommand 获取重启SSH服务的命令
-func getRestartCommand() string {
+// getRestartCommands 返回可尝试的重启 SSH 服务命令。
+func getRestartCommands() []string {
 	switch runtime.GOOS {
 	case "linux":
+		serviceNames := []string{"sshd", "ssh"}
+		var commands []string
 		if _, err := exec.LookPath("systemctl"); err == nil {
-			return "sudo systemctl restart sshd"
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo systemctl restart %s", svc))
+			}
 		}
-		return "sudo service sshd restart"
+		if _, err := exec.LookPath("service"); err == nil {
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo service %s restart", svc))
+			}
+		}
+		if len(commands) == 0 {
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo systemctl restart %s", svc))
+			}
+		}
+		return commands
 	case "darwin":
-		return "sudo launchctl kickstart -k system/com.openssh.sshd"
+		return []string{"sudo launchctl kickstart -k system/com.openssh.sshd"}
 	default:
-		return ""
+		return nil
 	}
+}
+
+type restartAttempt struct {
+	command []string
+	hint    string
+}
+
+func linuxRestartAttempts() ([]restartAttempt, []string) {
+	var attempts []restartAttempt
+	serviceNames := []string{"sshd", "ssh"}
+
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		for _, svc := range serviceNames {
+			attempts = append(attempts, restartAttempt{
+				command: []string{"systemctl", "restart", svc},
+				hint:    fmt.Sprintf("sudo systemctl restart %s", svc),
+			})
+		}
+	}
+
+	if _, err := exec.LookPath("service"); err == nil {
+		for _, svc := range serviceNames {
+			attempts = append(attempts, restartAttempt{
+				command: []string{"service", svc, "restart"},
+				hint:    fmt.Sprintf("sudo service %s restart", svc),
+			})
+		}
+	}
+
+	hints := make([]string, len(attempts))
+	for i, attempt := range attempts {
+		hints[i] = attempt.hint
+	}
+	if len(hints) == 0 {
+		hints = getRestartCommands()
+	}
+	return attempts, hints
 }
 
 // restartSSHService 重启 SSH 服务
@@ -200,24 +260,25 @@ func restartSSHService() error {
 	// 检查操作系统类型并执行相应的重启命令
 	switch runtime.GOOS {
 	case "linux":
-		// 尝试不同的服务管理器
-		if _, err := exec.LookPath("systemctl"); err == nil {
-			cmd := exec.Command("systemctl", "restart", "sshd")
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
-			}
-		} else if _, err := exec.LookPath("service"); err == nil {
-			cmd := exec.Command("service", "sshd", "restart")
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
-			}
-		} else {
-			return fmt.Errorf("未找到支持的服务管理器。请手动执行以下命令重启服务：\n  %s", getRestartCommand())
+		attempts, hints := linuxRestartAttempts()
+		if len(attempts) == 0 {
+			return fmt.Errorf("未找到支持的服务管理器。请手动执行以下命令重启服务：\n  %s", strings.Join(hints, "\n  "))
 		}
+
+		var lastErr error
+		for _, attempt := range attempts {
+			cmd := exec.Command(attempt.command[0], attempt.command[1:]...)
+			if err := cmd.Run(); err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
+		}
+		return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", strings.Join(hints, "\n  "), lastErr)
 	case "darwin":
 		cmd := exec.Command("sudo", "launchctl", "kickstart", "-k", "system/com.openssh.sshd")
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
+			return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", strings.Join(getRestartCommands(), "\n  "), err)
 		}
 	default:
 		return fmt.Errorf("不支持的操作系统: %s。请手动重启 SSH 服务", runtime.GOOS)
@@ -287,46 +348,364 @@ func ConfigureAuth(config SSHAuthConfig) error {
 	return nil
 }
 
+func rewritePortContent(content string, port int) (string, bool) {
+	lines := strings.Split(content, "\n")
+	updated := false
+	inMatchBlock := false
+
+	for i, originalLine := range lines {
+		trimmed := strings.TrimSpace(originalLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Match ") {
+			inMatchBlock = true
+			continue
+		}
+		if inMatchBlock {
+			continue
+		}
+
+		withoutComment := originalLine
+		comment := ""
+		if idx := strings.Index(originalLine, "#"); idx != -1 {
+			withoutComment = strings.TrimRight(originalLine[:idx], " \t")
+			comment = originalLine[idx:]
+		}
+
+		fields := strings.Fields(withoutComment)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "Port") {
+			indentLen := len(originalLine) - len(strings.TrimLeft(originalLine, " \t"))
+			indent := originalLine[:indentLen]
+
+			newLine := fmt.Sprintf("%sPort %d", indent, port)
+			if comment != "" {
+				if !strings.HasPrefix(comment, " ") {
+					newLine += " "
+				}
+				newLine += strings.TrimLeft(comment, " ")
+			}
+			lines[i] = newLine
+			updated = true
+		}
+	}
+
+	return strings.Join(lines, "\n"), updated
+}
+
+func rewritePortFile(path string, port int) (bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	newContent, updated := rewritePortContent(string(content), port)
+	if !updated {
+		return false, nil
+	}
+
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return false, err
+	}
+	debugf("updated Port directive in %s", path)
+	return true, nil
+}
+
+func commentPortDirectives(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	inMatchBlock := false
+	var result []string
+	changed := false
+
+	for _, originalLine := range lines {
+		trimmed := strings.TrimSpace(originalLine)
+
+		if trimmed == "" {
+			result = append(result, originalLine)
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
+			result = append(result, originalLine)
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Match ") {
+			inMatchBlock = true
+			result = append(result, originalLine)
+			continue
+		}
+
+		if !inMatchBlock {
+			withoutComment := originalLine
+			if idx := strings.Index(originalLine, "#"); idx != -1 {
+				withoutComment = strings.TrimRight(originalLine[:idx], " \t")
+			}
+
+			fields := strings.Fields(withoutComment)
+			if len(fields) >= 2 && strings.EqualFold(fields[0], "Port") {
+				indent := originalLine[:len(originalLine)-len(strings.TrimLeft(originalLine, " \t"))]
+				newLine := indent + "# " + strings.TrimSpace(originalLine)
+				result = append(result, newLine)
+				changed = true
+				continue
+			}
+		}
+
+		result = append(result, originalLine)
+	}
+
+	for len(result) > 0 && strings.TrimSpace(result[len(result)-1]) == "" {
+		result = result[:len(result)-1]
+	}
+
+	if len(result) == 0 {
+		return "", changed
+	}
+
+	return strings.Join(result, "\n") + "\n", changed
+}
+
+func commentPortFromFile(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	newContent, changed := commentPortDirectives(string(content))
+	if !changed {
+		return false, nil
+	}
+
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func parseIncludePatterns(content string) []string {
+	lines := strings.Split(content, "\n")
+	baseDir := filepath.Dir(sshConfigPath)
+	seen := make(map[string]struct{})
+	var patterns []string
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if idx := strings.Index(line, "#"); idx != -1 {
+			line = strings.TrimSpace(line[:idx])
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.EqualFold(fields[0], "Include") {
+			continue
+		}
+
+		for _, pattern := range fields[1:] {
+			pattern = strings.Trim(pattern, "\"")
+			if pattern == "" {
+				continue
+			}
+
+			expanded := expandPath(pattern)
+			if !filepath.IsAbs(expanded) {
+				expanded = filepath.Join(baseDir, expanded)
+			}
+
+			if _, ok := seen[expanded]; ok {
+				continue
+			}
+			seen[expanded] = struct{}{}
+			patterns = append(patterns, expanded)
+		}
+	}
+
+	return patterns
+}
+
+func writePortDropIn(port int) error {
+	dir := filepath.Join(filepath.Dir(sshConfigPath), "sshd_config.d")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, portDropInFile)
+	content := fmt.Sprintf("%s\nPort %d\n", portDropInHeader, port)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return err
+	}
+	debugf("wrote Port drop-in file %s", path)
+	return nil
+}
+
+func insertPortDirective(content string, port int) string {
+	lines := strings.Split(content, "\n")
+	insertIdx := len(lines)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Match ") {
+			insertIdx = i
+			break
+		}
+	}
+
+	portLine := fmt.Sprintf("Port %d", port)
+	result := make([]string, 0, len(lines)+2)
+	result = append(result, lines[:insertIdx]...)
+
+	if insertIdx > 0 && strings.TrimSpace(result[len(result)-1]) != "" {
+		result = append(result, "")
+	}
+
+	result = append(result, portLine)
+
+	if insertIdx < len(lines) {
+		if strings.TrimSpace(lines[insertIdx]) != "" {
+			result = append(result, "")
+		}
+		result = append(result, lines[insertIdx:]...)
+	} else {
+		result = append(result, "")
+	}
+
+	return strings.TrimRight(strings.Join(result, "\n"), "\n") + "\n"
+}
+
 func changePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口号必须在1-65535之间")
 	}
 
-	// 先备份配置文件
 	if err := backupConfig("changePort"); err != nil {
 		return fmt.Errorf("备份配置文件失败: %v", err)
 	}
 
-	// 读取配置文件
 	content, err := os.ReadFile(sshConfigPath)
 	if err != nil {
 		return fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	portFound := false
+	originalContent := string(content)
 
-	// 修改Port行
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "Port ") {
-			lines[i] = fmt.Sprintf("Port %d", port)
-			portFound = true
-			break
+	includePatterns := parseIncludePatterns(originalContent)
+	hasDropInInclude := false
+
+	if len(includePatterns) > 0 {
+		debugf("resolved include patterns: %v", includePatterns)
+	} else {
+		debugf("no include patterns detected in %s", sshConfigPath)
+	}
+
+	for _, pattern := range includePatterns {
+		if strings.Contains(pattern, "sshd_config.d") {
+			hasDropInInclude = true
+		}
+
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			debugf("failed to glob pattern %s: %v", pattern, err)
+			continue
+		}
+		if len(matches) == 0 {
+			debugf("pattern %s matched no files", pattern)
+		} else {
+			debugf("pattern %s matched files: %v", pattern, matches)
 		}
 	}
 
-	// 如果没有找到Port配置，添加一行
-	if !portFound {
-		lines = append([]string{fmt.Sprintf("Port %d", port)}, lines...)
+	if hasDropInInclude {
+		strippedContent, changed := commentPortDirectives(originalContent)
+		if changed {
+			if err := os.WriteFile(sshConfigPath, []byte(strippedContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("commented Port directive in %s", sshConfigPath)
+			content = []byte(strippedContent)
+		}
+
+		for _, pattern := range includePatterns {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				debugf("failed to glob pattern %s: %v", pattern, err)
+				continue
+			}
+
+			for _, match := range matches {
+				if filepath.Base(match) == portDropInFile {
+					continue
+				}
+
+				info, err := os.Stat(match)
+				if err != nil || info.IsDir() {
+					continue
+				}
+
+				commented, err := commentPortFromFile(match)
+				if err != nil {
+					return fmt.Errorf("注释 %s 中的 Port 配置失败: %w", match, err)
+				}
+				if commented {
+					debugf("commented Port directive in %s", match)
+				}
+			}
+		}
+
+		if err := writePortDropIn(port); err != nil {
+			return fmt.Errorf("写入 drop-in 配置失败: %w", err)
+		}
+	} else {
+		newContent, updated := rewritePortContent(originalContent, port)
+		if updated {
+			if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("updated Port directive in %s", sshConfigPath)
+			content = []byte(newContent)
+		}
+
+		portConfigured := updated
+
+		for _, pattern := range includePatterns {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				debugf("failed to glob pattern %s: %v", pattern, err)
+				continue
+			}
+
+			for _, match := range matches {
+				info, err := os.Stat(match)
+				if err != nil || info.IsDir() {
+					continue
+				}
+
+				changed, err := rewritePortFile(match, port)
+				if err != nil {
+					return fmt.Errorf("更新 %s 失败: %w", match, err)
+				}
+				if changed {
+					portConfigured = true
+				}
+			}
+		}
+
+		if !portConfigured {
+			finalContent := insertPortDirective(string(content), port)
+			if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("appended Port directive to %s", sshConfigPath)
+		}
 	}
 
-	// 写回配置文件
-	newContent := strings.Join(lines, "\n")
-	if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
-	}
-
-	// 重启服务
 	if err := restartSSHService(); err != nil {
 		fmt.Printf("警告：%v\n", err)
 		fmt.Println("配置已更新，但需要重启 SSH 服务才能生效。")
@@ -550,52 +929,48 @@ func GetPasswordAuthStatus() (bool, error) {
 	}
 
 	lines := strings.Split(string(content), "\n")
-	passwordAuthFound := false
+	passwordSet := false
+	passwordEnabled := true // OpenSSH 默认启用密码登录
+	challengeSet := false
+	challengeEnabled := false
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			continue // 跳过注释行
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
 
-		// 处理行尾注释
 		if idx := strings.Index(line, "#"); idx != -1 {
 			line = strings.TrimSpace(line[:idx])
 		}
 
-		if strings.HasPrefix(line, "PasswordAuthentication") {
-			passwordAuthFound = true
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return strings.ToLower(parts[1]) == "yes", nil
-			}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		key := strings.ToLower(fields[0])
+		value := strings.ToLower(fields[1])
+
+		switch key {
+		case "passwordauthentication":
+			passwordSet = true
+			passwordEnabled = value == "yes"
+		case "challengeresponseauthentication":
+			challengeSet = true
+			challengeEnabled = value == "yes"
 		}
 	}
 
-	// 如果找不到配置项，检查是否有 ChallengeResponseAuthentication
-	if !passwordAuthFound {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "#") {
-				continue
-			}
-
-			// 处理行尾注释
-			if idx := strings.Index(line, "#"); idx != -1 {
-				line = strings.TrimSpace(line[:idx])
-			}
-
-			if strings.HasPrefix(line, "ChallengeResponseAuthentication") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					return strings.ToLower(parts[1]) == "yes", nil
-				}
-			}
-		}
+	if passwordSet {
+		return passwordEnabled, nil
 	}
 
-	// 如果都找不到配置项，返回默认值 false（更安全的选择）
-	return false, nil
+	if challengeSet {
+		return challengeEnabled, nil
+	}
+
+	return true, nil
 }
 
 // GetPubKeyAuthStatus 获取密钥认证状态
