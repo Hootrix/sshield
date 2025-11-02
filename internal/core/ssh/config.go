@@ -180,19 +180,70 @@ func prepareKeyAuth(email string, config KeyTypeConfig) error {
 	return nil
 }
 
-// getRestartCommand 获取重启SSH服务的命令
-func getRestartCommand() string {
+// getRestartCommands 返回可尝试的重启 SSH 服务命令。
+func getRestartCommands() []string {
 	switch runtime.GOOS {
 	case "linux":
+		serviceNames := []string{"sshd", "ssh"}
+		var commands []string
 		if _, err := exec.LookPath("systemctl"); err == nil {
-			return "sudo systemctl restart sshd"
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo systemctl restart %s", svc))
+			}
 		}
-		return "sudo service sshd restart"
+		if _, err := exec.LookPath("service"); err == nil {
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo service %s restart", svc))
+			}
+		}
+		if len(commands) == 0 {
+			for _, svc := range serviceNames {
+				commands = append(commands, fmt.Sprintf("sudo systemctl restart %s", svc))
+			}
+		}
+		return commands
 	case "darwin":
-		return "sudo launchctl kickstart -k system/com.openssh.sshd"
+		return []string{"sudo launchctl kickstart -k system/com.openssh.sshd"}
 	default:
-		return ""
+		return nil
 	}
+}
+
+type restartAttempt struct {
+	command []string
+	hint    string
+}
+
+func linuxRestartAttempts() ([]restartAttempt, []string) {
+	var attempts []restartAttempt
+	serviceNames := []string{"sshd", "ssh"}
+
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		for _, svc := range serviceNames {
+			attempts = append(attempts, restartAttempt{
+				command: []string{"systemctl", "restart", svc},
+				hint:    fmt.Sprintf("sudo systemctl restart %s", svc),
+			})
+		}
+	}
+
+	if _, err := exec.LookPath("service"); err == nil {
+		for _, svc := range serviceNames {
+			attempts = append(attempts, restartAttempt{
+				command: []string{"service", svc, "restart"},
+				hint:    fmt.Sprintf("sudo service %s restart", svc),
+			})
+		}
+	}
+
+	hints := make([]string, len(attempts))
+	for i, attempt := range attempts {
+		hints[i] = attempt.hint
+	}
+	if len(hints) == 0 {
+		hints = getRestartCommands()
+	}
+	return attempts, hints
 }
 
 // restartSSHService 重启 SSH 服务
@@ -200,24 +251,25 @@ func restartSSHService() error {
 	// 检查操作系统类型并执行相应的重启命令
 	switch runtime.GOOS {
 	case "linux":
-		// 尝试不同的服务管理器
-		if _, err := exec.LookPath("systemctl"); err == nil {
-			cmd := exec.Command("systemctl", "restart", "sshd")
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
-			}
-		} else if _, err := exec.LookPath("service"); err == nil {
-			cmd := exec.Command("service", "sshd", "restart")
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
-			}
-		} else {
-			return fmt.Errorf("未找到支持的服务管理器。请手动执行以下命令重启服务：\n  %s", getRestartCommand())
+		attempts, hints := linuxRestartAttempts()
+		if len(attempts) == 0 {
+			return fmt.Errorf("未找到支持的服务管理器。请手动执行以下命令重启服务：\n  %s", strings.Join(hints, "\n  "))
 		}
+
+		var lastErr error
+		for _, attempt := range attempts {
+			cmd := exec.Command(attempt.command[0], attempt.command[1:]...)
+			if err := cmd.Run(); err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
+		}
+		return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", strings.Join(hints, "\n  "), lastErr)
 	case "darwin":
 		cmd := exec.Command("sudo", "launchctl", "kickstart", "-k", "system/com.openssh.sshd")
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", getRestartCommand(), err)
+			return fmt.Errorf("重启 SSH 服务失败。请手动执行以下命令重启服务：\n  %s\n\n错误信息：%v", strings.Join(getRestartCommands(), "\n  "), err)
 		}
 	default:
 		return fmt.Errorf("不支持的操作系统: %s。请手动重启 SSH 服务", runtime.GOOS)
