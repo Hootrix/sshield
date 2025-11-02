@@ -410,7 +410,10 @@ func newChangePasswordCmd() *cobra.Command {
 }
 
 func newPortCmd() *cobra.Command {
-	var port int
+	var (
+		port int
+		yes  bool
+	)
 	cmd := &cobra.Command{
 		Use:   "port [端口号]",
 		Short: "修改 SSH 端口",
@@ -462,12 +465,14 @@ func newPortCmd() *cobra.Command {
 			}
 
 			// 确认修改
-			fmt.Printf(">>> 确定要将 SSH 端口修改为 %d 吗？[y/N] ", port)
-			var confirm string
-			fmt.Scanln(&confirm)
-			if confirm != "y" && confirm != "Y" {
-				fmt.Println(">>> 已取消端口修改")
-				return nil
+			if !yes {
+				fmt.Printf(">>> 确定要将 SSH 端口修改为 %d 吗？[y/N] ", port)
+				var confirm string
+				fmt.Scanln(&confirm)
+				if confirm != "y" && confirm != "Y" {
+					fmt.Println(">>> 已取消端口修改")
+					return nil
+				}
 			}
 
 			// 修改端口
@@ -481,6 +486,7 @@ func newPortCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 22, "新的 SSH 端口号")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "无需二次确认，直接修改端口")
 	return cmd
 }
 
