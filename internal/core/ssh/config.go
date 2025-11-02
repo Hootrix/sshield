@@ -339,6 +339,103 @@ func ConfigureAuth(config SSHAuthConfig) error {
 	return nil
 }
 
+func rewritePortContent(content string, port int) (string, bool) {
+	lines := strings.Split(content, "\n")
+	updated := false
+
+	for i, originalLine := range lines {
+		trimmed := strings.TrimSpace(originalLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		withoutComment := originalLine
+		comment := ""
+		if idx := strings.Index(originalLine, "#"); idx != -1 {
+			withoutComment = strings.TrimRight(originalLine[:idx], " \t")
+			comment = originalLine[idx:]
+		}
+
+		fields := strings.Fields(withoutComment)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "Port") {
+			indentLen := len(originalLine) - len(strings.TrimLeft(originalLine, " \t"))
+			indent := originalLine[:indentLen]
+
+			newLine := fmt.Sprintf("%sPort %d", indent, port)
+			if comment != "" {
+				if !strings.HasPrefix(comment, " ") {
+					newLine += " "
+				}
+				newLine += strings.TrimLeft(comment, " ")
+			}
+			lines[i] = newLine
+			updated = true
+		}
+	}
+
+	return strings.Join(lines, "\n"), updated
+}
+
+func rewritePortFile(path string, port int) (bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	newContent, updated := rewritePortContent(string(content), port)
+	if !updated {
+		return false, nil
+	}
+
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func parseIncludePatterns(content string) []string {
+	lines := strings.Split(content, "\n")
+	baseDir := filepath.Dir(sshConfigPath)
+	seen := make(map[string]struct{})
+	var patterns []string
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if idx := strings.Index(line, "#"); idx != -1 {
+			line = strings.TrimSpace(line[:idx])
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.EqualFold(fields[0], "Include") {
+			continue
+		}
+
+		for _, pattern := range fields[1:] {
+			pattern = strings.Trim(pattern, "\"")
+			if pattern == "" {
+				continue
+			}
+
+			expanded := expandPath(pattern)
+			if !filepath.IsAbs(expanded) {
+				expanded = filepath.Join(baseDir, expanded)
+			}
+
+			if _, ok := seen[expanded]; ok {
+				continue
+			}
+			seen[expanded] = struct{}{}
+			patterns = append(patterns, expanded)
+		}
+	}
+
+	return patterns
+}
+
 func changePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口号必须在1-65535之间")
@@ -355,27 +452,50 @@ func changePort(port int) error {
 		return fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	portFound := false
+	originalContent := string(content)
 
-	// 修改Port行
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "Port ") {
-			lines[i] = fmt.Sprintf("Port %d", port)
-			portFound = true
-			break
+	newContent, updated := rewritePortContent(originalContent, port)
+	if updated {
+		if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
+			return fmt.Errorf("写入配置文件失败: %v", err)
+		}
+		content = []byte(newContent)
+	}
+
+	includePatterns := parseIncludePatterns(originalContent)
+	portConfigured := updated
+
+	for _, pattern := range includePatterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+
+		for _, match := range matches {
+			info, err := os.Stat(match)
+			if err != nil || info.IsDir() {
+				continue
+			}
+
+			changed, err := rewritePortFile(match, port)
+			if err != nil {
+				return fmt.Errorf("更新 %s 失败: %w", match, err)
+			}
+			if changed {
+				portConfigured = true
+			}
 		}
 	}
 
-	// 如果没有找到Port配置，添加一行
-	if !portFound {
-		lines = append([]string{fmt.Sprintf("Port %d", port)}, lines...)
-	}
-
-	// 写回配置文件
-	newContent := strings.Join(lines, "\n")
-	if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
+	if !portConfigured {
+		finalContent := strings.TrimRight(string(content), "\n")
+		if finalContent != "" {
+			finalContent += "\n"
+		}
+		finalContent += fmt.Sprintf("Port %d\n", port)
+		if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
+			return fmt.Errorf("写入配置文件失败: %v", err)
+		}
 	}
 
 	// 重启服务
