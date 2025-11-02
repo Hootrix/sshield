@@ -27,6 +27,8 @@ var (
 	defaultLogPaths     = []string{"/var/log/auth.log", "/var/log/secure"}
 )
 
+const journalHistoryTolerance = time.Minute
+
 // 解析 systemd journal 输出（journalctl -o json）的结构体
 type journalRecord struct {
 	Cursor     string `json:"__CURSOR"`
@@ -277,6 +279,9 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 		state = &SourceState{}
 	}
 
+	startTime := time.Now()
+	skipHistorical := follow && state.JournalCursor == "" && since <= 0
+
 	args := []string{"--no-pager", "-o", "json"}
 	if follow {
 		args = append(args, "--follow")
@@ -338,6 +343,17 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 			continue
 		}
 
+		if skipHistorical && shouldSkipHistoricalEvent(startTime, ts) {
+			skipHistorical = true
+			debugf("notify: 跳过历史 journald 事件 cursor=%s ts=%s", record.Cursor, ts.Format(time.RFC3339))
+			state.JournalCursor = record.Cursor
+			if err := store.Save(state); err != nil {
+				log.Printf("写入状态失败: %v", err)
+			}
+			continue
+		}
+		skipHistorical = false
+
 		if err := dispatchEvent(event); err != nil {
 			log.Printf("发送通知失败: %v", err)
 		}
@@ -365,6 +381,10 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 	}
 
 	return cmd.Wait()
+}
+
+func shouldSkipHistoricalEvent(start, event time.Time) bool {
+	return event.Before(start.Add(-journalHistoryTolerance))
 }
 
 func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, poll time.Duration, loc *time.Location) error {
