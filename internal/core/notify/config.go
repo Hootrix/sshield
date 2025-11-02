@@ -15,10 +15,6 @@ const (
 )
 
 func resolveConfigPath() (string, error) {
-	if os.Geteuid() == 0 {
-		return filepath.Join(systemConfigDir, configFile), nil
-	}
-
 	userConfigDir, err := os.UserConfigDir()
 	if err != nil || userConfigDir == "" {
 		home, homeErr := os.UserHomeDir()
@@ -92,26 +88,9 @@ func (cm *ConfigManager) LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(cm.configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if os.Geteuid() != 0 {
-				systemPath := filepath.Join(systemConfigDir, configFile)
-				if systemPath != cm.configPath {
-					data, err = os.ReadFile(systemPath)
-					if err == nil {
-						cm.configPath = systemPath
-					} else if os.IsNotExist(err) {
-						return nil, ErrConfigNotFound
-					} else {
-						return nil, fmt.Errorf("failed to read config file: %w", err)
-					}
-				} else {
-					return nil, ErrConfigNotFound
-				}
-			} else {
-				return nil, ErrConfigNotFound
-			}
-		} else {
-			return nil, fmt.Errorf("failed to read config file: %w", err)
+			return nil, ErrConfigNotFound
 		}
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var cfg Config
