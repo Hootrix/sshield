@@ -66,6 +66,29 @@ sshield ssh port 2201 --yes
 sshield ssh password-login --disable
 ```
 
+### 环境变量配置
+
+需要避免在命令历史中暴露敏感参数时，可以预先设置以下环境变量为 `notify email` 提供默认值：
+
+- `SSHIELD_NOTIFY_EMAIL_TO`：收件人邮箱地址
+- `SSHIELD_NOTIFY_EMAIL_FROM`：发件人邮箱地址
+- `SSHIELD_NOTIFY_EMAIL_SERVER`：SMTP 服务器主机名
+- `SSHIELD_NOTIFY_EMAIL_PORT`：SMTP 端口号
+- `SSHIELD_NOTIFY_EMAIL_USER`：SMTP 用户名
+- `SSHIELD_NOTIFY_EMAIL_PASSWORD`：SMTP 密码
+
+示例：
+
+```bash
+export SSHIELD_NOTIFY_EMAIL_TO=ops@example.com
+export SSHIELD_NOTIFY_EMAIL_FROM=ssh@example.com
+export SSHIELD_NOTIFY_EMAIL_SERVER=smtp.example.com
+export SSHIELD_NOTIFY_EMAIL_USER=smtp-user
+export SSHIELD_NOTIFY_EMAIL_PASSWORD='super-secret'
+
+sshield notify email
+```
+
 ## 部署示例
 
 默认未配置通知渠道时，`watch`/`sweep` 仍会将监控结果输出到标准输出，可配合 systemd 日志留档。

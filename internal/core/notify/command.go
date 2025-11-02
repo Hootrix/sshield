@@ -12,6 +12,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	envEmailToKey     = "SSHIELD_NOTIFY_EMAIL_TO"
+	envEmailFromKey   = "SSHIELD_NOTIFY_EMAIL_FROM"
+	envEmailServerKey = "SSHIELD_NOTIFY_EMAIL_SERVER"
+	envEmailUserKey   = "SSHIELD_NOTIFY_EMAIL_USER"
+	envEmailPassKey   = "SSHIELD_NOTIFY_EMAIL_PASSWORD"
+	envEmailPortKey   = "SSHIELD_NOTIFY_EMAIL_PORT"
+)
+
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "notify",
@@ -55,12 +64,16 @@ func newEmailCmd() *cobra.Command {
 		user   string
 		pass   string
 		port   int
+		envErr error
 	)
 
 	cmd := &cobra.Command{
 		Use:   "email",
 		Short: "配置 SMTP 邮件通知",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if envErr != nil {
+				return envErr
+			}
 			cfg := EmailConfig{
 				To:     to,
 				From:   from,
@@ -80,6 +93,8 @@ func newEmailCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&pass, "password", "p", "", "SMTP 密码")
 	cmd.Flags().IntVar(&port, "port", 587, "SMTP 服务器端口")
 
+	envErr = applyEmailEnvDefaults(cmd)
+
 	_ = cmd.MarkFlagRequired("to")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("server")
@@ -87,6 +102,43 @@ func newEmailCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("password")
 
 	return cmd
+}
+
+type envBinding struct {
+	flag string
+	env  string
+	mask bool
+}
+
+func applyEmailEnvDefaults(cmd *cobra.Command) error {
+	bindings := []envBinding{
+		{flag: "to", env: envEmailToKey},
+		{flag: "from", env: envEmailFromKey},
+		{flag: "server", env: envEmailServerKey},
+		{flag: "user", env: envEmailUserKey},
+		{flag: "password", env: envEmailPassKey, mask: true},
+		{flag: "port", env: envEmailPortKey},
+	}
+
+	for _, binding := range bindings {
+		raw := strings.TrimSpace(os.Getenv(binding.env))
+		if raw == "" {
+			continue
+		}
+
+		if err := cmd.Flags().Set(binding.flag, raw); err != nil {
+			return fmt.Errorf("failed to apply %s: %w", binding.env, err)
+		}
+
+		if binding.mask {
+			debugf("notify: 使用环境变量 %s 覆盖 --%s", binding.env, binding.flag)
+			continue
+		}
+
+		debugf("notify: 使用环境变量 %s=%s 覆盖 --%s", binding.env, raw, binding.flag)
+	}
+
+	return nil
 }
 
 // NewWatchCommand 返回 watch 子命令，用于持续监控 SSH 登录事件。
