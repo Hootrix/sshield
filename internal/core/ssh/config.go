@@ -536,6 +536,12 @@ func changePort(port int) error {
 	portConfigured := updated
 	hasDropInInclude := false
 
+	if len(includePatterns) > 0 {
+		debugf("resolved include patterns: %v", includePatterns)
+	} else {
+		debugf("no include patterns detected in %s", sshConfigPath)
+	}
+
 	for _, pattern := range includePatterns {
 		if strings.Contains(pattern, "sshd_config.d") {
 			hasDropInInclude = true
@@ -545,6 +551,11 @@ func changePort(port int) error {
 		if err != nil {
 			debugf("failed to glob pattern %s: %v", pattern, err)
 			continue
+		}
+		if len(matches) == 0 {
+			debugf("pattern %s matched no files", pattern)
+		} else {
+			debugf("pattern %s matched files: %v", pattern, matches)
 		}
 
 		for _, match := range matches {
@@ -564,19 +575,24 @@ func changePort(port int) error {
 	}
 
 	if !portConfigured {
-		if hasDropInInclude {
-			if err := writePortDropIn(port); err != nil {
-				return fmt.Errorf("写入 drop-in 配置失败: %w", err)
-			}
-			portConfigured = true
-		} else {
+		if !hasDropInInclude {
 			finalContent := insertPortDirective(string(content), port)
 			if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
 				return fmt.Errorf("写入配置文件失败: %v", err)
 			}
 			debugf("appended Port directive to %s", sshConfigPath)
+			portConfigured = true
 		}
 	}
+
+	if hasDropInInclude {
+		if err := writePortDropIn(port); err != nil {
+			return fmt.Errorf("写入 drop-in 配置失败: %w", err)
+		}
+		portConfigured = true
+	}
+
+	debugf("portConfigured=%v hasDropInInclude=%v", portConfigured, hasDropInInclude)
 
 	if err := restartSSHService(); err != nil {
 		fmt.Printf("警告：%v\n", err)
