@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -63,5 +65,49 @@ func TestApplyEmailEnvDefaultsInvalidPort(t *testing.T) {
 
 	if err := applyEmailEnvDefaults(cmd); err == nil {
 		t.Fatalf("expected error for invalid port")
+	}
+}
+
+func TestSweepCommandNotifyDefaultOff(t *testing.T) {
+	cmd := NewSweepCommand()
+	tmp := t.TempDir()
+
+	var captured SweepOptions
+	orig := runSweepFunc
+	runSweepFunc = func(ctx context.Context, opts SweepOptions) error {
+		captured = opts
+		return nil
+	}
+	defer func() { runSweepFunc = orig }()
+
+	cmd.SetArgs([]string{"--state-file", filepath.Join(tmp, "state.json")})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute sweep command: %v", err)
+	}
+
+	if captured.Notify {
+		t.Fatalf("expected notify default to be false")
+	}
+}
+
+func TestSweepCommandNotifyFlag(t *testing.T) {
+	cmd := NewSweepCommand()
+	tmp := t.TempDir()
+
+	var captured SweepOptions
+	orig := runSweepFunc
+	runSweepFunc = func(ctx context.Context, opts SweepOptions) error {
+		captured = opts
+		return nil
+	}
+	defer func() { runSweepFunc = orig }()
+
+	cmd.SetArgs([]string{"--state-file", filepath.Join(tmp, "state.json"), "--notify"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute sweep command: %v", err)
+	}
+
+	if !captured.Notify {
+		t.Fatalf("expected notify flag to enable notifications")
 	}
 }

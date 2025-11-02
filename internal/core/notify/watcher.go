@@ -54,6 +54,7 @@ type SweepOptions struct {
 	JournalUnits []string
 	LogPaths     []string
 	Since        time.Duration
+	Notify       bool
 	DisplayLoc   *time.Location
 }
 
@@ -90,7 +91,7 @@ func RunWatch(ctx context.Context, opts WatchOptions) error {
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, opts.PollTimeout, true, 0, loc)
+		return runJournal(ctx, store, state, selection.Units, opts.PollTimeout, true, 0, loc, true)
 	case sourceFile:
 		return followLogFile(ctx, store, state, selection.LogPath, opts.PollTimeout, loc)
 	default:
@@ -120,9 +121,9 @@ func RunSweep(ctx context.Context, opts SweepOptions) error {
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, 0, false, opts.Since, loc)
+		return runJournal(ctx, store, state, selection.Units, 0, false, opts.Since, loc, opts.Notify)
 	case sourceFile:
-		return sweepLogFile(ctx, store, state, selection.LogPath, opts.Since, loc)
+		return sweepLogFile(ctx, store, state, selection.LogPath, opts.Since, loc, opts.Notify)
 	default:
 		return fmt.Errorf("未知监听源: %s", selection.Source)
 	}
@@ -274,7 +275,7 @@ func firstExisting(paths []string) (string, bool) {
 	return "", false
 }
 
-func runJournal(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration, loc *time.Location) error {
+func runJournal(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration, loc *time.Location, notify bool) error {
 	if state == nil {
 		state = &SourceState{}
 	}
@@ -354,8 +355,12 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 		}
 		skipHistorical = false
 
-		if err := dispatchEvent(event); err != nil {
-			log.Printf("发送通知失败: %v", err)
+		if notify {
+			if err := dispatchEvent(event); err != nil {
+				log.Printf("发送通知失败: %v", err)
+			}
+		} else {
+			debugf("notify: sweep 跳过通知 event type=%s host=%s", event.Type, event.Hostname)
 		}
 
 		printEventSummary(*event, loc)
@@ -427,7 +432,7 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 	}
 }
 
-func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, since time.Duration, loc *time.Location) error {
+func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, since time.Duration, loc *time.Location, notify bool) error {
 	offset := state.FileOffsets[path]
 	startOffset := offset
 	cutoff := time.Time{}
@@ -444,8 +449,12 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 		if !cutoff.IsZero() && event.Timestamp.Before(cutoff) {
 			return
 		}
-		if err := dispatchEvent(event); err != nil {
-			log.Printf("发送通知失败: %v", err)
+		if notify {
+			if err := dispatchEvent(event); err != nil {
+				log.Printf("发送通知失败: %v", err)
+			}
+		} else {
+			debugf("notify: sweep 跳过通知 event type=%s host=%s", event.Type, event.Hostname)
 		}
 		printEventSummary(*event, loc)
 	}

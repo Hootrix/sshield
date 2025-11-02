@@ -39,7 +39,8 @@ sshield notify status                    # 查看当前通知配置
 
 # 登录事件监听
 sshield ssh watch                        # 实时监听 SSH 登录并发送通知（推荐 systemd service）
-sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（适合 cron/容器）
+sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（默认仅输出）
+sshield ssh sweep --since 5m --notify    # 同步发送通知
 # 可选参数：--source auto|journal|file，--timezone Asia/Shanghai|Local 等
 # 可选参数：--journal-unit sshd.service --log-path /var/log/auth.log 等
 ```

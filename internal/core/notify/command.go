@@ -21,6 +21,10 @@ const (
 	envEmailPortKey   = "SSHIELD_NOTIFY_EMAIL_PORT"
 )
 
+var (
+	runSweepFunc = RunSweep
+)
+
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "notify",
@@ -210,6 +214,7 @@ func NewSweepCommand() *cobra.Command {
 		units     []string
 		logs      []string
 		timezone  string
+		notify    bool
 	)
 
 	cmd := &cobra.Command{
@@ -238,9 +243,10 @@ func NewSweepCommand() *cobra.Command {
 				Source:       source,
 				JournalUnits: units,
 				LogPaths:     logs,
+				Notify:       notify,
 				DisplayLoc:   loc,
 			}
-			return RunSweep(ctx, opts)
+			return runSweepFunc(ctx, opts)
 		},
 	}
 
@@ -250,6 +256,7 @@ func NewSweepCommand() *cobra.Command {
 	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要扫描的 Journal 单元名（可重复，默认 sshd.service｜ssh.service）")
 	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要扫描的 SSH 认证日志路径（可重复，默认 /var/log/auth.log、/var/log/secure）")
 	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'，默认 Asia/Shanghai）")
+	cmd.Flags().BoolVar(&notify, "notify", false, "是否发送通知（默认仅输出到控制台）")
 
 	return cmd
 }
