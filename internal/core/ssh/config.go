@@ -24,9 +24,18 @@ const (
 	// KeyTypeRSA 使用RSA算法（用于兼容旧系统）
 	KeyTypeRSA KeyType = "rsa"
 
-	sshConfigPath  = "/etc/ssh/sshd_config"
-	defaultKeyPath = "~/.ssh/id_rsa"
+	sshConfigPath    = "/etc/ssh/sshd_config"
+	defaultKeyPath   = "~/.ssh/id_rsa"
+	portDropInFile   = "99-sshield-port.conf"
+	portDropInHeader = "# Managed by sshield"
 )
+
+func debugf(format string, args ...interface{}) {
+	if os.Getenv("SSHIELD_DEBUG") == "" {
+		return
+	}
+	fmt.Printf("[sshield-debug] "+format+"\n", args...)
+}
 
 // KeyTypeConfig 定义密钥生成的配置
 type KeyTypeConfig struct {
@@ -342,10 +351,19 @@ func ConfigureAuth(config SSHAuthConfig) error {
 func rewritePortContent(content string, port int) (string, bool) {
 	lines := strings.Split(content, "\n")
 	updated := false
+	inMatchBlock := false
 
 	for i, originalLine := range lines {
 		trimmed := strings.TrimSpace(originalLine)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Match ") {
+			inMatchBlock = true
+			continue
+		}
+		if inMatchBlock {
 			continue
 		}
 
@@ -390,6 +408,7 @@ func rewritePortFile(path string, port int) (bool, error) {
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return false, err
 	}
+	debugf("updated Port directive in %s", path)
 	return true, nil
 }
 
@@ -436,17 +455,67 @@ func parseIncludePatterns(content string) []string {
 	return patterns
 }
 
+func writePortDropIn(port int) error {
+	dir := filepath.Join(filepath.Dir(sshConfigPath), "sshd_config.d")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, portDropInFile)
+	content := fmt.Sprintf("%s\nPort %d\n", portDropInHeader, port)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return err
+	}
+	debugf("wrote Port drop-in file %s", path)
+	return nil
+}
+
+func insertPortDirective(content string, port int) string {
+	lines := strings.Split(content, "\n")
+	insertIdx := len(lines)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Match ") {
+			insertIdx = i
+			break
+		}
+	}
+
+	portLine := fmt.Sprintf("Port %d", port)
+	result := make([]string, 0, len(lines)+2)
+	result = append(result, lines[:insertIdx]...)
+
+	if insertIdx > 0 && strings.TrimSpace(result[len(result)-1]) != "" {
+		result = append(result, "")
+	}
+
+	result = append(result, portLine)
+
+	if insertIdx < len(lines) {
+		if strings.TrimSpace(lines[insertIdx]) != "" {
+			result = append(result, "")
+		}
+		result = append(result, lines[insertIdx:]...)
+	} else {
+		result = append(result, "")
+	}
+
+	return strings.TrimRight(strings.Join(result, "\n"), "\n") + "\n"
+}
+
 func changePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口号必须在1-65535之间")
 	}
 
-	// 先备份配置文件
 	if err := backupConfig("changePort"); err != nil {
 		return fmt.Errorf("备份配置文件失败: %v", err)
 	}
 
-	// 读取配置文件
 	content, err := os.ReadFile(sshConfigPath)
 	if err != nil {
 		return fmt.Errorf("读取配置文件失败: %v", err)
@@ -459,15 +528,22 @@ func changePort(port int) error {
 		if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
 			return fmt.Errorf("写入配置文件失败: %v", err)
 		}
+		debugf("updated Port directive in %s", sshConfigPath)
 		content = []byte(newContent)
 	}
 
 	includePatterns := parseIncludePatterns(originalContent)
 	portConfigured := updated
+	hasDropInInclude := false
 
 	for _, pattern := range includePatterns {
+		if strings.Contains(pattern, "sshd_config.d") {
+			hasDropInInclude = true
+		}
+
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
+			debugf("failed to glob pattern %s: %v", pattern, err)
 			continue
 		}
 
@@ -488,17 +564,20 @@ func changePort(port int) error {
 	}
 
 	if !portConfigured {
-		finalContent := strings.TrimRight(string(content), "\n")
-		if finalContent != "" {
-			finalContent += "\n"
-		}
-		finalContent += fmt.Sprintf("Port %d\n", port)
-		if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
-			return fmt.Errorf("写入配置文件失败: %v", err)
+		if hasDropInInclude {
+			if err := writePortDropIn(port); err != nil {
+				return fmt.Errorf("写入 drop-in 配置失败: %w", err)
+			}
+			portConfigured = true
+		} else {
+			finalContent := insertPortDirective(string(content), port)
+			if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("appended Port directive to %s", sshConfigPath)
 		}
 	}
 
-	// 重启服务
 	if err := restartSSHService(); err != nil {
 		fmt.Printf("警告：%v\n", err)
 		fmt.Println("配置已更新，但需要重启 SSH 服务才能生效。")

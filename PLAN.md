@@ -10,3 +10,4 @@
 - [x] 优化 Linux 平台 SSH 服务重启逻辑，兼容 `ssh` 服务名称并提供准确提示。
 - [x] 修正 `ssh password-login` 状态检测，确保与实际配置一致。
 - [x] 修复 Ubuntu 24 下 SSH 端口修改未生效的问题，兼容 Include 配置。
+- [x] 增加端口调试日志并完善 drop-in 写入逻辑。
