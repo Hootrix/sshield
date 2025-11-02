@@ -27,6 +27,7 @@ var (
 	defaultLogPaths     = []string{"/var/log/auth.log", "/var/log/secure"}
 )
 
+// journalRecord maps journald JSON output so watcher can emit structured notifications.
 type journalRecord struct {
 	Cursor     string `json:"__CURSOR"`
 	Message    string `json:"MESSAGE"`
