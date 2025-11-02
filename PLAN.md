@@ -11,4 +11,5 @@
 - [x] 修正 `ssh password-login` 状态检测，确保与实际配置一致。
 - [x] 修复 Ubuntu 24 下 SSH 端口修改未生效的问题，兼容 Include 配置。
 - [x] 增加端口调试日志并完善 drop-in 写入逻辑。
+- [x] 调整端口配置策略：使用 drop-in 时仅保留单一 Port 定义。
 - [x] 扩充端口调试输出并强制 drop-in 端口覆盖，确保最终生效。

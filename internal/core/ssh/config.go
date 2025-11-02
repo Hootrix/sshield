@@ -412,6 +412,76 @@ func rewritePortFile(path string, port int) (bool, error) {
 	return true, nil
 }
 
+func removePortDirectives(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	inMatchBlock := false
+	var result []string
+	removed := false
+
+	for _, originalLine := range lines {
+		trimmed := strings.TrimSpace(originalLine)
+
+		if trimmed == "" {
+			result = append(result, originalLine)
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
+			result = append(result, originalLine)
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Match ") {
+			inMatchBlock = true
+			result = append(result, originalLine)
+			continue
+		}
+
+		if !inMatchBlock {
+			withoutComment := originalLine
+			if idx := strings.Index(originalLine, "#"); idx != -1 {
+				withoutComment = strings.TrimRight(originalLine[:idx], " \t")
+			}
+
+			fields := strings.Fields(withoutComment)
+			if len(fields) >= 2 && strings.EqualFold(fields[0], "Port") {
+				removed = true
+				continue
+			}
+		}
+
+		result = append(result, originalLine)
+	}
+
+	for len(result) > 0 && strings.TrimSpace(result[len(result)-1]) == "" {
+		result = result[:len(result)-1]
+	}
+
+	if len(result) == 0 {
+		return "", removed
+	}
+
+	return strings.Join(result, "\n") + "\n", removed
+}
+
+func removePortFromFile(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	newContent, removed := removePortDirectives(string(content))
+	if !removed {
+		return false, nil
+	}
+
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
 func parseIncludePatterns(content string) []string {
 	lines := strings.Split(content, "\n")
 	baseDir := filepath.Dir(sshConfigPath)
@@ -523,17 +593,7 @@ func changePort(port int) error {
 
 	originalContent := string(content)
 
-	newContent, updated := rewritePortContent(originalContent, port)
-	if updated {
-		if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
-			return fmt.Errorf("写入配置文件失败: %v", err)
-		}
-		debugf("updated Port directive in %s", sshConfigPath)
-		content = []byte(newContent)
-	}
-
 	includePatterns := parseIncludePatterns(originalContent)
-	portConfigured := updated
 	hasDropInInclude := false
 
 	if len(includePatterns) > 0 {
@@ -557,42 +617,91 @@ func changePort(port int) error {
 		} else {
 			debugf("pattern %s matched files: %v", pattern, matches)
 		}
+	}
 
-		for _, match := range matches {
-			info, err := os.Stat(match)
-			if err != nil || info.IsDir() {
+	if hasDropInInclude {
+		strippedContent, removed := removePortDirectives(originalContent)
+		if removed {
+			if err := os.WriteFile(sshConfigPath, []byte(strippedContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("removed Port directive from %s", sshConfigPath)
+			content = []byte(strippedContent)
+		}
+
+		for _, pattern := range includePatterns {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				debugf("failed to glob pattern %s: %v", pattern, err)
 				continue
 			}
 
-			changed, err := rewritePortFile(match, port)
-			if err != nil {
-				return fmt.Errorf("更新 %s 失败: %w", match, err)
-			}
-			if changed {
-				portConfigured = true
+			for _, match := range matches {
+				if filepath.Base(match) == portDropInFile {
+					continue
+				}
+
+				info, err := os.Stat(match)
+				if err != nil || info.IsDir() {
+					continue
+				}
+
+				removed, err := removePortFromFile(match)
+				if err != nil {
+					return fmt.Errorf("移除 %s 中的 Port 配置失败: %w", match, err)
+				}
+				if removed {
+					debugf("removed Port directive from %s", match)
+				}
 			}
 		}
-	}
 
-	if !portConfigured {
-		if !hasDropInInclude {
+		if err := writePortDropIn(port); err != nil {
+			return fmt.Errorf("写入 drop-in 配置失败: %w", err)
+		}
+	} else {
+		newContent, updated := rewritePortContent(originalContent, port)
+		if updated {
+			if err := os.WriteFile(sshConfigPath, []byte(newContent), 0644); err != nil {
+				return fmt.Errorf("写入配置文件失败: %v", err)
+			}
+			debugf("updated Port directive in %s", sshConfigPath)
+			content = []byte(newContent)
+		}
+
+		portConfigured := updated
+
+		for _, pattern := range includePatterns {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				debugf("failed to glob pattern %s: %v", pattern, err)
+				continue
+			}
+
+			for _, match := range matches {
+				info, err := os.Stat(match)
+				if err != nil || info.IsDir() {
+					continue
+				}
+
+				changed, err := rewritePortFile(match, port)
+				if err != nil {
+					return fmt.Errorf("更新 %s 失败: %w", match, err)
+				}
+				if changed {
+					portConfigured = true
+				}
+			}
+		}
+
+		if !portConfigured {
 			finalContent := insertPortDirective(string(content), port)
 			if err := os.WriteFile(sshConfigPath, []byte(finalContent), 0644); err != nil {
 				return fmt.Errorf("写入配置文件失败: %v", err)
 			}
 			debugf("appended Port directive to %s", sshConfigPath)
-			portConfigured = true
 		}
 	}
-
-	if hasDropInInclude {
-		if err := writePortDropIn(port); err != nil {
-			return fmt.Errorf("写入 drop-in 配置失败: %w", err)
-		}
-		portConfigured = true
-	}
-
-	debugf("portConfigured=%v hasDropInInclude=%v", portConfigured, hasDropInInclude)
 
 	if err := restartSSHService(); err != nil {
 		fmt.Printf("警告：%v\n", err)
