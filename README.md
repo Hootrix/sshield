@@ -47,6 +47,25 @@ sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（�
 默认保存位置：
 - 配置文件路径：`~/.config/sshield/notify.json`
 
+## 使用示例与调试
+
+```bash
+# 开启调试输出（可选）
+export SSHIELD_DEBUG=1
+
+# 配置登录密钥（默认生成 ED25519）
+sshield ssh key --type ed25519
+
+# 修改 SSH 端口（带确认提示）
+sshield ssh port 2201
+
+# 跳过确认直接修改端口
+sshield ssh port 2201 --yes
+
+# 禁用密码登录
+sshield ssh password-login --disable
+```
+
 ## 部署示例
 
 默认未配置通知渠道时，`watch`/`sweep` 仍会将监控结果输出到标准输出，可配合 systemd 日志留档。
@@ -99,7 +118,12 @@ go mod tidy
 
 3. 构建
 ```bash
-GOOS=linux GOARCH=amd64 go build -ldflags='-s -w -extldflags "-static -fpic"' -o bin/sshield cmd/sshield/main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w -extldflags "-static -fpic"' -o bin/sshield cmd/sshield/main.go
+
+
+CGO_ENABLED=0 GOOS=linux GOARCH=386 \
+go build -ldflags="-s -w" -o bin/sshield cmd/sshield/main.go
+
 
 go build -o bin/sshield cmd/sshield/main.go
 ```
