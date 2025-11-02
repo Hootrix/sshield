@@ -40,12 +40,12 @@ sshield notify status                    # 查看当前通知配置
 # 登录事件监听
 sshield notify watch                     # 实时监听 SSH 登录并发送通知（推荐 systemd service）
 sshield notify sweep --since 5m          # 处理最近 5 分钟登录事件（适合 cron/容器）
-# 可选参数：--source auto|journal|file，--journal-unit sshd.service --log-path /var/log/auth.log 等
+# 可选参数：--source auto|journal|file，--timezone Asia/Shanghai|Local 等
+# 可选参数：--journal-unit sshd.service --log-path /var/log/auth.log 等
 ```
 
 默认保存位置：
-- root 用户：`/etc/sshield/notify.json`
-- 普通用户：`~/.config/sshield/notify.json`
+- 配置文件路径统一为：`~/.config/sshield/notify.json`（若系统配置目录不可用则自动回退至该路径）
 
 ## 部署示例
 
@@ -99,5 +99,7 @@ go mod tidy
 
 3. 构建
 ```bash
+GOOS=linux GOARCH=amd64 go build -ldflags='-s -w -extldflags "-static -fpic"' -o bin/sshield cmd/sshield/main.go
+
 go build -o bin/sshield cmd/sshield/main.go
 ```
