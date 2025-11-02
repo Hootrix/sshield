@@ -2,16 +2,17 @@ package ssh
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/Hootrix/sshield/internal/core/notify"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	"net"
 )
 
 var (
@@ -30,6 +31,8 @@ func NewCommand() *cobra.Command {
 		newPasswordLoginCmd(),
 		newChangePasswordCmd(),
 		newPortCmd(),
+		notify.NewWatchCommand(),
+		notify.NewSweepCommand(),
 	)
 
 	return cmd

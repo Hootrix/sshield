@@ -6,3 +6,4 @@
 - [x] 在 `internal/core/notify/watcher.go` 中为 `journalRecord` 添加作用说明注释。
 - [x] 统一通知配置文件路径逻辑，改为固定使用用户配置目录。
 - [x] 更新 README 中的配置路径说明，反映统一后的目录。
+- [x] 将 `watch`/`sweep` 命令挂载到 `ssh` 子命令并同步文档示例。

@@ -15,14 +15,12 @@ import (
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "notify",
-		Short: "管理登录通知与监控",
+		Short: "管理登录通知配置",
 	}
 
 	cmd.AddCommand(
 		newWebhookCmd(),
 		newEmailCmd(),
-		newWatchCmd(),
-		newSweepCmd(),
 		newTestCmd(),
 		newStatusCmd(),
 	)
@@ -91,7 +89,8 @@ func newEmailCmd() *cobra.Command {
 	return cmd
 }
 
-func newWatchCmd() *cobra.Command {
+// NewWatchCommand 返回 watch 子命令，用于持续监控 SSH 登录事件。
+func NewWatchCommand() *cobra.Command {
 	var (
 		stateFile string
 		poll      time.Duration
@@ -150,7 +149,8 @@ func newWatchCmd() *cobra.Command {
 	return cmd
 }
 
-func newSweepCmd() *cobra.Command {
+// NewSweepCommand 返回 sweep 子命令，用于一次性扫描 SSH 登录事件。
+func NewSweepCommand() *cobra.Command {
 	var (
 		stateFile string
 		since     time.Duration

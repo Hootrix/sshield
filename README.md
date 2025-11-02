@@ -38,14 +38,14 @@ sshield notify test                      # 发送测试通知
 sshield notify status                    # 查看当前通知配置
 
 # 登录事件监听
-sshield notify watch                     # 实时监听 SSH 登录并发送通知（推荐 systemd service）
-sshield notify sweep --since 5m          # 处理最近 5 分钟登录事件（适合 cron/容器）
+sshield ssh watch                        # 实时监听 SSH 登录并发送通知（推荐 systemd service）
+sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（适合 cron/容器）
 # 可选参数：--source auto|journal|file，--timezone Asia/Shanghai|Local 等
 # 可选参数：--journal-unit sshd.service --log-path /var/log/auth.log 等
 ```
 
 默认保存位置：
-- 配置文件路径统一为：`~/.config/sshield/notify.json`（若系统配置目录不可用则自动回退至该路径）
+- 配置文件路径：`~/.config/sshield/notify.json`
 
 ## 部署示例
 
@@ -59,7 +59,7 @@ Description=SSHield login watcher
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/sshield notify watch
+ExecStart=/usr/local/bin/sshield ssh watch
 Restart=always
 User=root
 
@@ -74,7 +74,7 @@ sudo systemctl enable --now sshield-notify.service
 ### cron / 定时任务
 
 ```bash
-* * * * * /usr/local/bin/sshield notify sweep --since 90s >> /var/log/sshield.log 2>&1
+* * * * * /usr/local/bin/sshield ssh sweep --since 90s >> /var/log/sshield.log 2>&1
 ```
 
 ## 贡献
