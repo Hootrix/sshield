@@ -89,6 +89,8 @@ export SSHIELD_NOTIFY_EMAIL_PASSWORD='super-secret'
 sshield notify email
 ```
 
+> 提示：`notify email` 会对 SMTP 连接设置超时，并在 465 端口自动启用 TLS，避免因网络阻塞造成命令卡住。
+
 ## 部署示例
 
 默认未配置通知渠道时，`watch`/`sweep` 仍会将监控结果输出到标准输出，可配合 systemd 日志留档。

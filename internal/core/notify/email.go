@@ -1,8 +1,11 @@
 package notify
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/smtp"
+	"strings"
 	"time"
 )
 
@@ -87,7 +90,15 @@ func (e *EmailNotifier) Send(event LoginEvent) error {
 	auth := smtp.PlainAuth("", e.Username, e.Password, e.Server)
 	addr := fmt.Sprintf("%s:%d", e.Server, e.Port)
 
-	return smtp.SendMail(addr, auth, e.From, []string{e.To}, []byte(msg))
+	// 旧实现直接使用 smtp.SendMail，无法控制超时且不支持 465 端口的隐式 TLS，会导致命令卡住。
+	// return smtp.SendMail(addr, auth, e.From, []string{e.To}, []byte(msg))
+
+	debugf("notify: 准备连接 SMTP %s", addr)
+	if err := e.sendMailWithTimeout(addr, auth, []byte(msg)); err != nil {
+		return err
+	}
+	debugf("notify: SMTP 发送完成")
+	return nil
 }
 
 func (e *EmailNotifier) Test() error {
@@ -100,6 +111,114 @@ func (e *EmailNotifier) Test() error {
 		Location:  "Test Location",
 	}
 	return e.Send(testEvent)
+}
+
+const (
+	defaultDialTimeout  = 10 * time.Second
+	defaultSMTPDeadline = 30 * time.Second
+)
+
+func needsImplicitTLS(port int) bool {
+	return port == 465
+}
+
+func (e *EmailNotifier) sendMailWithTimeout(addr string, auth smtp.Auth, msg []byte) error {
+	if err := validateSMTPLine(e.From); err != nil {
+		return err
+	}
+	if err := validateSMTPLine(e.To); err != nil {
+		return err
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid smtp addr %s: %w", addr, err)
+	}
+
+	dialer := &net.Dialer{Timeout: defaultDialTimeout}
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to connect smtp server: %w", err)
+	}
+
+	deadline := time.Now().Add(defaultSMTPDeadline)
+	_ = conn.SetDeadline(deadline)
+
+	implicitTLS := needsImplicitTLS(e.Port)
+
+	var client *smtp.Client
+	if implicitTLS {
+		debugf("notify: 使用隐式 TLS 连接 SMTP %s", addr)
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: host})
+		if err := tlsConn.Handshake(); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("smtp tls handshake failed: %w", err)
+		}
+		_ = tlsConn.SetDeadline(deadline)
+		client, err = smtp.NewClient(tlsConn, host)
+	} else {
+		client, err = smtp.NewClient(conn, host)
+	}
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("failed to create smtp client: %w", err)
+	}
+	defer client.Close()
+
+	if !implicitTLS {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			debugf("notify: SMTP 支持 STARTTLS，将升级连接")
+			if err := client.StartTLS(&tls.Config{ServerName: host}); err != nil {
+				return fmt.Errorf("failed to start TLS: %w", err)
+			}
+		} else {
+			debugf("notify: SMTP 不支持 STARTTLS，继续使用明文通道")
+		}
+	}
+
+	if auth != nil {
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return fmt.Errorf("smtp: server doesn't support AUTH")
+		}
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("smtp auth failed: %w", err)
+		}
+	}
+
+	if err := client.Mail(e.From); err != nil {
+		return fmt.Errorf("smtp mail from failed: %w", err)
+	}
+
+	if err := client.Rcpt(e.To); err != nil {
+		return fmt.Errorf("smtp rcpt to failed: %w", err)
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("smtp data begin failed: %w", err)
+	}
+
+	if _, err := w.Write(msg); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("smtp data write failed: %w", err)
+	}
+
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("smtp data close failed: %w", err)
+	}
+
+	if err := client.Quit(); err != nil {
+		return fmt.Errorf("smtp quit failed: %w", err)
+	}
+
+	return nil
+}
+
+func validateSMTPLine(line string) error {
+	if strings.ContainsAny(line, "\r\n") {
+		return fmt.Errorf("smtp: invalid line contains CR/LF")
+	}
+	return nil
 }
 
 func configureEmail(input EmailConfig) error {
