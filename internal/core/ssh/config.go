@@ -412,11 +412,11 @@ func rewritePortFile(path string, port int) (bool, error) {
 	return true, nil
 }
 
-func removePortDirectives(content string) (string, bool) {
+func commentPortDirectives(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	inMatchBlock := false
 	var result []string
-	removed := false
+	changed := false
 
 	for _, originalLine := range lines {
 		trimmed := strings.TrimSpace(originalLine)
@@ -445,7 +445,10 @@ func removePortDirectives(content string) (string, bool) {
 
 			fields := strings.Fields(withoutComment)
 			if len(fields) >= 2 && strings.EqualFold(fields[0], "Port") {
-				removed = true
+				indent := originalLine[:len(originalLine)-len(strings.TrimLeft(originalLine, " \t"))]
+				newLine := indent + "# " + strings.TrimSpace(originalLine)
+				result = append(result, newLine)
+				changed = true
 				continue
 			}
 		}
@@ -458,20 +461,20 @@ func removePortDirectives(content string) (string, bool) {
 	}
 
 	if len(result) == 0 {
-		return "", removed
+		return "", changed
 	}
 
-	return strings.Join(result, "\n") + "\n", removed
+	return strings.Join(result, "\n") + "\n", changed
 }
 
-func removePortFromFile(path string) (bool, error) {
+func commentPortFromFile(path string) (bool, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
 
-	newContent, removed := removePortDirectives(string(content))
-	if !removed {
+	newContent, changed := commentPortDirectives(string(content))
+	if !changed {
 		return false, nil
 	}
 
@@ -620,12 +623,12 @@ func changePort(port int) error {
 	}
 
 	if hasDropInInclude {
-		strippedContent, removed := removePortDirectives(originalContent)
-		if removed {
+		strippedContent, changed := commentPortDirectives(originalContent)
+		if changed {
 			if err := os.WriteFile(sshConfigPath, []byte(strippedContent), 0644); err != nil {
 				return fmt.Errorf("写入配置文件失败: %v", err)
 			}
-			debugf("removed Port directive from %s", sshConfigPath)
+			debugf("commented Port directive in %s", sshConfigPath)
 			content = []byte(strippedContent)
 		}
 
@@ -646,12 +649,12 @@ func changePort(port int) error {
 					continue
 				}
 
-				removed, err := removePortFromFile(match)
+				commented, err := commentPortFromFile(match)
 				if err != nil {
-					return fmt.Errorf("移除 %s 中的 Port 配置失败: %w", match, err)
+					return fmt.Errorf("注释 %s 中的 Port 配置失败: %w", match, err)
 				}
-				if removed {
-					debugf("removed Port directive from %s", match)
+				if commented {
+					debugf("commented Port directive in %s", match)
 				}
 			}
 		}
