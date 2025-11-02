@@ -27,7 +27,7 @@ var (
 	defaultLogPaths     = []string{"/var/log/auth.log", "/var/log/secure"}
 )
 
-// journalRecord maps journald JSON output so watcher can emit structured notifications.
+// 解析 systemd journal 输出（journalctl -o json）的结构体
 type journalRecord struct {
 	Cursor     string `json:"__CURSOR"`
 	Message    string `json:"MESSAGE"`
