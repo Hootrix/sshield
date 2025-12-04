@@ -1,8 +1,8 @@
 package notify
 
 import (
+	"fmt"
 	"net/mail"
-	"net/url"
 	"strings"
 )
 
@@ -11,27 +11,36 @@ type ConfigValidator interface {
 	Validate() error
 }
 
-// ValidateConfig 验证通知配置
+// ValidateConfig 验证整个配置
 func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return ErrConfigInvalid
 	}
 
-	validationErr := &ValidationError{}
-
-	// 验证基本配置
-	if !cfg.Enabled {
-		return ErrNotEnabled
+	for i, ch := range cfg.Channels {
+		if err := ValidateChannelConfig(&ch); err != nil {
+			return fmt.Errorf("渠道 %d (%s): %w", i+1, ch.Type, err)
+		}
 	}
 
-	// 验证通知类型
-	switch strings.ToLower(cfg.Type) {
-	case "webhook":
-		validateWebhookConfig(cfg, validationErr)
+	return nil
+}
+
+// ValidateChannelConfig 验证渠道配置
+func ValidateChannelConfig(ch *ChannelConfig) error {
+	if ch == nil {
+		return ErrConfigInvalid
+	}
+
+	validationErr := &ValidationError{}
+
+	switch strings.ToLower(ch.Type) {
+	case "curl":
+		validateCurlChannel(ch, validationErr)
 	case "email":
-		validateEmailConfig(cfg, validationErr)
+		validateEmailChannel(ch, validationErr)
 	default:
-		validationErr.AddError("type", "unsupported notification type")
+		validationErr.AddError("type", "unsupported notification type: "+ch.Type)
 	}
 
 	if validationErr.HasErrors() {
@@ -41,56 +50,56 @@ func ValidateConfig(cfg *Config) error {
 	return nil
 }
 
-// validateWebhookConfig 验证 Webhook 配置
-func validateWebhookConfig(cfg *Config, validationErr *ValidationError) {
-	if cfg.WebhookURL == "" {
-		validationErr.AddError("webhook_url", "webhook URL is required")
+// validateCurlChannel 验证 Curl 渠道配置
+func validateCurlChannel(ch *ChannelConfig, validationErr *ValidationError) {
+	if ch.Curl == nil {
+		validationErr.AddError("curl", "curl config is required")
 		return
 	}
 
-	// 验证 URL 格式
-	_, err := url.ParseRequestURI(cfg.WebhookURL)
-	if err != nil {
-		validationErr.AddError("webhook_url", "invalid webhook URL format")
-	}
-
-	// 验证 URL 协议
-	if !strings.HasPrefix(cfg.WebhookURL, "https://") && !strings.HasPrefix(cfg.WebhookURL, "http://") {
-		validationErr.AddError("webhook_url", "webhook URL must start with http:// or https://")
+	if ch.Curl.Command == "" {
+		validationErr.AddError("curl.command", "curl command is required")
 	}
 }
 
-// validateEmailConfig 验证邮件配置
-func validateEmailConfig(cfg *Config, validationErr *ValidationError) {
+// validateEmailChannel 验证邮件渠道配置
+func validateEmailChannel(ch *ChannelConfig, validationErr *ValidationError) {
+	if ch.Email == nil {
+		validationErr.AddError("email", "email config is required")
+		return
+	}
+
+	e := ch.Email
+
 	// 验证收件人邮箱
-	if cfg.EmailTo == "" {
-		validationErr.AddError("email_to", "recipient email is required")
-	} else if _, err := mail.ParseAddress(cfg.EmailTo); err != nil {
-		validationErr.AddError("email_to", "invalid recipient email format")
+	if e.To == "" {
+		validationErr.AddError("email.to", "recipient email is required")
+	} else if _, err := mail.ParseAddress(e.To); err != nil {
+		validationErr.AddError("email.to", "invalid recipient email format")
 	}
 
 	// 验证发件人邮箱
-	if cfg.EmailFrom == "" {
-		validationErr.AddError("email_from", "sender email is required")
-	} else if _, err := mail.ParseAddress(cfg.EmailFrom); err != nil {
-		validationErr.AddError("email_from", "invalid sender email format")
+	if e.From == "" {
+		validationErr.AddError("email.from", "sender email is required")
+	} else if _, err := mail.ParseAddress(e.From); err != nil {
+		validationErr.AddError("email.from", "invalid sender email format")
 	}
 
 	// 验证 SMTP 服务器配置
-	if cfg.SMTPServer == "" {
-		validationErr.AddError("smtp_server", "SMTP server is required")
+	if e.Server == "" {
+		validationErr.AddError("email.server", "SMTP server is required")
 	}
 
-	if cfg.SMTPPort <= 0 || cfg.SMTPPort > 65535 {
-		validationErr.AddError("smtp_port", "invalid SMTP port")
+	if e.Port <= 0 || e.Port > 65535 {
+		validationErr.AddError("email.port", "invalid SMTP port")
 	}
 
 	// 验证认证信息
-	if cfg.SMTPUser == "" {
-		validationErr.AddError("smtp_user", "SMTP username is required")
+	if e.User == "" {
+		validationErr.AddError("email.user", "SMTP username is required")
 	}
 
-	if cfg.SMTPPass == "" {
-		validationErr.AddError("smtp_pass", "SMTP password is required")
+	if e.Pass == "" {
+		validationErr.AddError("email.pass", "SMTP password is required")
 	}
 }

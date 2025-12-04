@@ -11,18 +11,14 @@ func testNotification() error {
 	cfg, err := loadConfig()
 	if err != nil {
 		if errors.Is(err, ErrConfigNotFound) {
-			return fmt.Errorf("notification is not configured")
+			return fmt.Errorf("未配置通知渠道")
 		}
-		return fmt.Errorf("load config failed: %w", err)
+		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	if cfg == nil || !cfg.Enabled {
-		return fmt.Errorf("notification is not enabled")
-	}
-
-	notifier, err := buildNotifier(*cfg)
-	if err != nil {
-		return err
+	channels := cfg.GetEnabledChannels()
+	if len(channels) == 0 {
+		return fmt.Errorf("没有启用的通知渠道")
 	}
 
 	hostname, _ := os.Hostname()
@@ -38,5 +34,23 @@ func testNotification() error {
 		LogPath:   "-",
 	}
 
-	return notifier.Send(event)
+	var errs []error
+	for _, ch := range channels {
+		notifier, err := buildChannelNotifier(ch)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", ch.Type, err))
+			continue
+		}
+		fmt.Printf("正在测试渠道: %s...\n", ch.Type)
+		if err := notifier.Send(event); err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", ch.Type, err))
+		} else {
+			fmt.Printf("✓ 渠道 %s 测试成功\n", ch.Type)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("部分渠道测试失败: %v", errs)
+	}
+	return nil
 }

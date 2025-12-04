@@ -21,29 +21,33 @@ func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool)
 
 	if matches := successRe.FindStringSubmatch(message); len(matches) == 5 {
 		port, _ := strconv.Atoi(matches[4])
+		ip := stripAddress(matches[3])
 		return &LoginEvent{
 			Type:      EventLoginSuccess,
 			User:      matches[2],
-			IP:        stripAddress(matches[3]),
+			IP:        ip,
 			Method:    normalizeMethod(matches[1]),
 			Port:      port,
 			Timestamp: ts,
 			Hostname:  host,
 			Message:   message,
+			Location:  LookupIPLocation(ip),
 		}, true
 	}
 
 	if matches := failRe.FindStringSubmatch(message); len(matches) == 5 {
 		port, _ := strconv.Atoi(matches[4])
+		ip := stripAddress(matches[3])
 		return &LoginEvent{
 			Type:      EventLoginFailed,
 			User:      matches[2],
-			IP:        stripAddress(matches[3]),
+			IP:        ip,
 			Method:    normalizeMethod(matches[1]),
 			Port:      port,
 			Timestamp: ts,
 			Hostname:  host,
 			Message:   message,
+			Location:  LookupIPLocation(ip),
 		}, true
 	}
 

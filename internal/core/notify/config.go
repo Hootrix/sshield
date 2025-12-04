@@ -138,26 +138,43 @@ func loadConfig() (*Config, error) {
 }
 
 func printConfigSummary(cfg *Config) {
-	if cfg == nil {
-		fmt.Println("未找到通知配置。")
+	if cfg == nil || len(cfg.Channels) == 0 {
+		fmt.Println("未配置通知渠道。")
 		return
 	}
 
-	fmt.Println("通知配置：")
-	status := "禁用"
-	if cfg.Enabled {
-		status = "启用"
-	}
-	fmt.Printf("  状态：%s\n", status)
-	fmt.Printf("  类型：%s\n", strings.ToUpper(cfg.Type))
-	switch strings.ToLower(cfg.Type) {
-	case "webhook":
-		fmt.Printf("  Webhook：%s\n", cfg.WebhookURL)
-	case "email":
-		fmt.Printf("  收件人：%s\n", cfg.EmailTo)
-		fmt.Printf("  发件人：%s\n", cfg.EmailFrom)
-		fmt.Printf("  SMTP：%s:%d\n", cfg.SMTPServer, cfg.SMTPPort)
-	default:
-		fmt.Println("  未知类型。")
+	fmt.Printf("通知渠道（共 %d 个）：\n", len(cfg.Channels))
+	for i, ch := range cfg.Channels {
+		status := "禁用"
+		if ch.Enabled {
+			status = "启用"
+		}
+
+		name := ch.Type
+		if ch.Name != "" {
+			name = ch.Name
+		}
+
+		fmt.Printf("\n  [%d] %s（%s）\n", i+1, strings.ToUpper(ch.Type), status)
+		if ch.Name != "" {
+			fmt.Printf("      名称：%s\n", name)
+		}
+
+		switch strings.ToLower(ch.Type) {
+		case "curl":
+			if ch.Curl != nil {
+				curlDisplay := ch.Curl.Command
+				if len(curlDisplay) > 60 {
+					curlDisplay = curlDisplay[:57] + "..."
+				}
+				fmt.Printf("      命令：%s\n", curlDisplay)
+			}
+		case "email":
+			if ch.Email != nil {
+				fmt.Printf("      收件人：%s\n", ch.Email.To)
+				fmt.Printf("      发件人：%s\n", ch.Email.From)
+				fmt.Printf("      SMTP：%s:%d\n", ch.Email.Server, ch.Email.Port)
+			}
+		}
 	}
 }

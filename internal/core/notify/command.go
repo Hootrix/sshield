@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ func NewCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		newWebhookCmd(),
+		newCurlCmd(),
 		newEmailCmd(),
 		newTestCmd(),
 		newStatusCmd(),
@@ -41,21 +42,51 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
-func newWebhookCmd() *cobra.Command {
-	var url string
-	var insecure bool
+func newCurlCmd() *cobra.Command {
+	var isBase64 bool
 
 	cmd := &cobra.Command{
-		Use:   "webhook",
-		Short: "配置 Webhook 通知",
+		Use:   "curl <curl命令>",
+		Short: "配置 Curl 通知",
+		Long: `配置基于 curl 命令的通知，支持以下模板变量：
+
+  {{.Type}}      - 事件类型（login_success/login_failed）
+  {{.User}}      - 登录用户名
+  {{.IP}}        - 来源 IP
+  {{.Port}}      - 来源端口
+  {{.Method}}    - 认证方式（password/publickey）
+  {{.Hostname}}  - 服务器主机名
+  {{.Timestamp}} - 事件时间
+  {{.Location}}  - IP 地理位置
+  {{.LogPath}}   - 日志来源路径
+  {{.Message}}   - 原始日志消息
+
+示例：
+  # 直接输入 curl 命令
+  sshield notify curl 'curl -X POST -H "Content-Type: application/json" -d "{\"user\":\"{{.User}}\"}" https://example.com/webhook'
+
+  # 使用 base64 编码（避免引号和空格问题）
+  # 先编码: echo -n 'curl -X POST ...' | base64
+  sshield notify curl --base64 'Y3VybCAtWCBQT1NUIC1IICJDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24iIC1kICJ7XCJ1c2VyXCI6XCJ7ey5Vc2VyfX1cIn0iIGh0dHBzOi8vZXhhbXBsZS5jb20vd2ViaG9vaw=='`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return configureWebhook(url, insecure)
+			curlCmd := args[0]
+
+			// 如果是 base64 编码，先解码
+			if isBase64 {
+				decoded, err := base64.StdEncoding.DecodeString(curlCmd)
+				if err != nil {
+					return fmt.Errorf("base64 解码失败: %w", err)
+				}
+				curlCmd = string(decoded)
+				fmt.Printf("已解码 curl 命令: %s\n", curlCmd)
+			}
+
+			return configureCurl(curlCmd)
 		},
 	}
 
-	cmd.Flags().StringVarP(&url, "url", "u", "", "Webhook 目标地址")
-	cmd.Flags().BoolVar(&insecure, "insecure", false, "允许使用不安全的 HTTP Webhook（不推荐）")
-	_ = cmd.MarkFlagRequired("url")
+	cmd.Flags().BoolVar(&isBase64, "base64", false, "curl 命令使用 base64 编码")
 
 	return cmd
 }
@@ -78,7 +109,7 @@ func newEmailCmd() *cobra.Command {
 			if envErr != nil {
 				return envErr
 			}
-			cfg := EmailConfig{
+			input := EmailInput{
 				To:     to,
 				From:   from,
 				Server: server,
@@ -86,7 +117,7 @@ func newEmailCmd() *cobra.Command {
 				Pass:   pass,
 				Port:   port,
 			}
-			return configureEmail(cfg)
+			return configureEmail(input)
 		},
 	}
 

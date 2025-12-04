@@ -586,16 +586,31 @@ func dispatchEvent(event *LoginEvent) error {
 		}
 		return fmt.Errorf("读取通知配置失败: %w", err)
 	}
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil
 	}
 
-	notifier, err := buildNotifier(*cfg)
-	if err != nil {
-		return err
+	channels := cfg.GetEnabledChannels()
+	if len(channels) == 0 {
+		return nil
 	}
 
-	return notifier.Send(*event)
+	var errs []error
+	for _, ch := range channels {
+		notifier, err := buildChannelNotifier(ch)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", channelDisplayName(ch), err))
+			continue
+		}
+		if err := notifier.Send(*event); err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", channelDisplayName(ch), err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("部分通知失败: %v", errs)
+	}
+	return nil
 }
 
 func normalizeLocation(loc *time.Location) *time.Location {
@@ -604,14 +619,22 @@ func normalizeLocation(loc *time.Location) *time.Location {
 	}
 	return loc
 }
-func buildNotifier(cfg Config) (Notifier, error) {
-	switch strings.ToLower(cfg.Type) {
-	case "webhook":
-		return NewWebhookNotifier(cfg.WebhookURL), nil
+
+// buildChannelNotifier 根据渠道配置构建通知器
+func buildChannelNotifier(ch ChannelConfig) (Notifier, error) {
+	switch strings.ToLower(ch.Type) {
+	case "curl":
+		if ch.Curl == nil {
+			return nil, fmt.Errorf("curl 配置为空")
+		}
+		return NewCurlNotifier(ch.Curl.Command)
 	case "email":
-		return NewEmailNotifier(cfg), nil
+		if ch.Email == nil {
+			return nil, fmt.Errorf("email 配置为空")
+		}
+		return NewEmailNotifierFromChannel(ch.Email), nil
 	default:
-		return nil, fmt.Errorf("未知通知类型: %s", cfg.Type)
+		return nil, fmt.Errorf("未知通知类型: %s", ch.Type)
 	}
 }
 
