@@ -9,32 +9,16 @@ import (
 )
 
 const (
-	// 默认用户配置目录，否则使用系统配置目录
-	systemConfigDir = "/etc/sshield"
+	// 配置目录
+	configDir = "/etc/sshield"
 	// 配置文件
-	configFile       = "notify.json"
+	configFile = "notify.json"
+	// 状态目录
 	defaultStateRoot = "/var/lib/sshield"
 )
 
-func resolveConfigPath() (string, error) {
-	userConfigDir, err := os.UserConfigDir()
-	if err != nil || userConfigDir == "" {
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil || home == "" {
-			return "", fmt.Errorf("failed to resolve user config directory: %w", firstErr(err, homeErr))
-		}
-		userConfigDir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(userConfigDir, "sshield", configFile), nil
-}
-
-func firstErr(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return fmt.Errorf("unknown error")
+func resolveConfigPath() string {
+	return filepath.Join(configDir, configFile)
 }
 
 // ConfigManager 配置管理器
@@ -44,14 +28,8 @@ type ConfigManager struct {
 
 // NewConfigManager 创建配置管理器
 func NewConfigManager() *ConfigManager {
-	path, err := resolveConfigPath()
-	if err != nil {
-		return &ConfigManager{
-			configPath: filepath.Join(systemConfigDir, configFile),
-		}
-	}
 	return &ConfigManager{
-		configPath: path,
+		configPath: resolveConfigPath(),
 	}
 }
 
@@ -63,12 +41,7 @@ func (cm *ConfigManager) SaveConfig(cfg Config) error {
 	}
 
 	dir := filepath.Dir(cm.configPath)
-	perm := os.FileMode(0700)
-	if os.Geteuid() == 0 {
-		perm = 0755
-	}
-
-	if err := os.MkdirAll(dir, perm); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
