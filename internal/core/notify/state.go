@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 )
 
+// 存储读取进度的文件
 const cursorFileName = "notify.state"
 
 // SourceState 记录不同来源的处理进度

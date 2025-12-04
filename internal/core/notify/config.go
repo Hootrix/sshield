@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	systemConfigDir  = "/etc/sshield"
+	// 默认用户配置目录，否则使用系统配置目录
+	systemConfigDir = "/etc/sshield"
+	// 配置文件
 	configFile       = "notify.json"
 	defaultStateRoot = "/var/lib/sshield"
 )
