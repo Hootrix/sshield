@@ -48,7 +48,10 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 ```
 
 默认保存位置：
-- 配置文件路径：`~/.config/sshield/notify.json`
+- 配置文件：`/etc/sshield/notify.json`
+- 状态文件：`/var/lib/sshield/notify.state`
+
+> **注意**：使用 `watch` 或 `sweep --notify` 前，需先配置通知方式（email 或 webhook），否则只会输出日志不会发送通知。
 
 ## 使用示例与调试
 
@@ -98,31 +101,79 @@ sshield notify email
 
 默认未配置通知渠道时，`watch`/`sweep` 仍会将监控结果输出到标准输出，可配合 systemd 日志留档。
 
-### systemd service
+### systemd service（推荐）
+
+适用于使用 systemd 的发行版（Ubuntu 16.04+、Debian 8+、CentOS 7+、RHEL 7+、Fedora、Arch、openSUSE 等）。
+
+**方式一：自动安装（推荐）**
+
+```bash
+# 安装服务
+sudo sshield service install
+
+# 启动并设置开机自启
+sudo systemctl start sshield-notify
+sudo systemctl enable sshield-notify
+
+# 查看状态
+sshield service status
+
+# 卸载服务
+sudo sshield service uninstall
+```
+
+**方式二：手动创建** `/etc/systemd/system/sshield-notify.service`：
 
 ```ini
 [Unit]
-Description=SSHield login watcher
-After=network.target
+Description=SSHield SSH login watcher
+After=network.target syslog.target
+# 限制重启频率：60秒内最多重启10次（放在 Unit 段兼容旧版 systemd）
+StartLimitIntervalSec=60
+StartLimitBurst=10
 
 [Service]
+Type=simple
 ExecStart=/usr/local/bin/sshield ssh watch
 Restart=always
-User=root
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sshield
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
+# 启用并启动服务
+sudo systemctl daemon-reload
 sudo systemctl enable --now sshield-notify.service
+
+# 查看状态与日志
+sudo systemctl status sshield-notify
+sudo journalctl -u sshield-notify -f
 ```
 
-### cron / 定时任务
+### SysVinit / OpenRC（老旧发行版）
+
+对于不使用 systemd 的系统（如 CentOS 6、Alpine、Gentoo 默认配置），可使用 `nohup` + cron 兜底：
 
 ```bash
-* * * * * /usr/local/bin/sshield ssh sweep --since 90s >> /var/log/sshield.log 2>&1
+# /etc/init.d/sshield-notify 或直接用 cron 启动
+nohup /usr/local/bin/sshield ssh watch >> /var/log/sshield.log 2>&1 &
 ```
+
+### cron 兜底（所有发行版通用）
+
+即使 watch 进程意外退出，cron 也能定期补漏：
+
+```bash
+# 每分钟扫描最近 90 秒的登录事件
+* * * * * /usr/local/bin/sshield ssh sweep --since 90s --notify >> /var/log/sshield.log 2>&1
+```
+
+> **建议**：systemd service + cron 兜底组合使用，确保不漏报。
 
 ## 贡献
 

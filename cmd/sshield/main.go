@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/Hootrix/sshield/internal/core/notify"
+	"github.com/Hootrix/sshield/internal/core/service"
 	"github.com/Hootrix/sshield/internal/core/ssh"
 	"github.com/Hootrix/sshield/internal/version"
 	"github.com/spf13/cobra"
@@ -28,5 +29,6 @@ func init() {
 		ssh.NewCommand(),
 		// firewall.NewCommand(),
 		notify.NewCommand(),
+		service.NewCommand(),
 	)
 }
