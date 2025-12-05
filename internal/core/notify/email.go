@@ -11,6 +11,7 @@ import (
 
 // EmailInput 命令行输入的邮件配置
 type EmailInput struct {
+	Name   string
 	To     string
 	From   string
 	Server string
@@ -250,8 +251,15 @@ func configureEmail(input EmailInput) error {
 	}
 	fmt.Println("✓ 测试成功")
 
+	// 如果未指定 name，生成默认名称
+	name := input.Name
+	if name == "" {
+		name = generateChannelName("email")
+	}
+
 	// 创建渠道配置
 	channel := ChannelConfig{
+		Name:    name,
 		Enabled: true,
 		Type:    "email",
 		Email:   emailCfg,

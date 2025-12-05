@@ -137,7 +137,7 @@ func formatLoginMessage(event LoginEvent) string {
 }
 
 // configureCurl 配置基于 curl 命令的通知
-func configureCurl(curlCmd string) error {
+func configureCurl(curlCmd, name string) error {
 	// 解析并验证 curl 命令
 	notifier, err := NewCurlNotifier(curlCmd)
 	if err != nil {
@@ -151,8 +151,14 @@ func configureCurl(curlCmd string) error {
 	}
 	fmt.Println("✓ 测试成功")
 
+	// 如果未指定 name，生成默认名称
+	if name == "" {
+		name = generateChannelName("curl")
+	}
+
 	// 创建渠道配置
 	channel := ChannelConfig{
+		Name:    name,
 		Enabled: true,
 		Type:    "curl",
 		Curl:    &CurlConfig{Command: curlCmd},
@@ -161,7 +167,7 @@ func configureCurl(curlCmd string) error {
 	return addOrUpdateChannel(channel)
 }
 
-// addOrUpdateChannel 添加或更新渠道配置
+// addOrUpdateChannel 添加或更新渠道配置（按 Name 判断是否为同一渠道）
 func addOrUpdateChannel(newChannel ChannelConfig) error {
 	cm := NewConfigManager()
 
@@ -174,13 +180,13 @@ func addOrUpdateChannel(newChannel ChannelConfig) error {
 		cfg = &Config{}
 	}
 
-	// 检查是否已存在相同的渠道，如果存在则更新
+	// 按 Name 查找是否已存在，存在则更新
 	found := false
 	for i, ch := range cfg.Channels {
-		if isSameChannel(ch, newChannel) {
+		if ch.Name != "" && ch.Name == newChannel.Name {
 			cfg.Channels[i] = newChannel
 			found = true
-			fmt.Printf("✓ 已更新渠道: %s\n", channelDisplayName(newChannel))
+			fmt.Printf("✓ 已更新渠道: %s\n", newChannel.Name)
 			break
 		}
 	}
@@ -188,7 +194,7 @@ func addOrUpdateChannel(newChannel ChannelConfig) error {
 	// 如果不存在则添加
 	if !found {
 		cfg.Channels = append(cfg.Channels, newChannel)
-		fmt.Printf("✓ 已添加渠道: %s\n", channelDisplayName(newChannel))
+		fmt.Printf("✓ 已添加渠道: %s\n", newChannel.Name)
 	}
 
 	// 备份并保存
@@ -209,30 +215,21 @@ func addOrUpdateChannel(newChannel ChannelConfig) error {
 	return nil
 }
 
-// isSameChannel 判断两个渠道是否相同（用于更新判断）
-func isSameChannel(a, b ChannelConfig) bool {
-	if a.Type != b.Type {
-		return false
-	}
-	switch a.Type {
-	case "curl":
-		if a.Curl == nil || b.Curl == nil {
-			return false
-		}
-		return a.Curl.Command == b.Curl.Command
-	case "email":
-		if a.Email == nil || b.Email == nil {
-			return false
-		}
-		return a.Email.To == b.Email.To && a.Email.Server == b.Email.Server
-	}
-	return false
-}
-
 // channelDisplayName 获取渠道显示名称
 func channelDisplayName(ch ChannelConfig) string {
 	if ch.Name != "" {
 		return ch.Name
 	}
 	return ch.Type
+}
+
+// generateChannelName 生成默认渠道名称
+func generateChannelName(prefix string) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+		time.Sleep(time.Nanosecond)
+	}
+	return fmt.Sprintf("%s_%s", prefix, string(b))
 }

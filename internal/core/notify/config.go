@@ -150,15 +150,12 @@ func printConfigSummary(cfg *Config) {
 			status = "启用"
 		}
 
-		name := ch.Type
+		// 显示格式: [序号] 类型（状态）名称
+		namePart := ""
 		if ch.Name != "" {
-			name = ch.Name
+			namePart = fmt.Sprintf(" - %s", ch.Name)
 		}
-
-		fmt.Printf("\n  [%d] %s（%s）\n", i+1, strings.ToUpper(ch.Type), status)
-		if ch.Name != "" {
-			fmt.Printf("      名称：%s\n", name)
-		}
+		fmt.Printf("\n  [%d] %s（%s）%s\n", i+1, strings.ToUpper(ch.Type), status, namePart)
 
 		switch strings.ToLower(ch.Type) {
 		case "curl":

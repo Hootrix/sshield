@@ -2,6 +2,9 @@
 
 SSHield 是 Linux 服务器SSH加固工具
 
+> [!note]
+> Linux发行版测试覆盖不全，使用时请保持谨慎心态
+
 ## 特性
 
 - 🔐 SSH 安全加固
@@ -36,27 +39,32 @@ sshield ssh password-login --disable     # 禁用密码登录
 sshield ssh change-password -u user -r   # 为用户生成随机强密码
 sshield ssh port -p 2222                 # 修改 SSH 端口
 
-# ssh 登录通知
-# 通知配置（curl webhook）
+# ssh 通知渠道配置
+# curl webhook
 sshield notify curl 'curl -X POST -H "Content-Type: application/json" -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"SSH登录: {{.User}}@{{.IP}}\"}}" https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'
 # 支持 --base64 传入编码字符，避免引号和空格问题
 sshield notify curl --base64 'Y3VybCAtWCBQT1NUIC1IICJDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24iIC1kICJ7XCJ1c2VyXCI6XCJ7ey5Vc2VyfX1cIn0iIGh0dHBzOi8vZXhhbXBsZS5jb20vd2ViaG9vaw=='
 
-
-# 通知配置（email）
+# email
 sshield notify email --to ops@example.com --from ssh@example.com --server smtp.example.com --user smtp-user --password secret
 
 sshield notify test                      # 发送测试通知
-sshield notify status                    # 查看当前通知配置
+sshield notify status                    # 查看当前通知渠道配置
+sshield notify enable --all # 启用所有通知渠道
+sshield notify enable --name my-webhook	# 按名称启用
+sshield notify enable --index 1	# 按序号启用
+sshield notify disable --all # 禁用所有通知渠道
+# 新增/删除/修改渠道都会立即生效
 
-# ssh监听服务 推荐 systemd service
+
+# 推荐ssh监听服务(systemd service)
 sudo sshield service install
 # 启动并设置服务开机自启
 sudo systemctl start sshield-notify
 sudo systemctl enable sshield-notify
 # 查看状态
 sshield service status
-# 卸载服务
+# 卸载ssh监听服务(systemd service)
 sudo sshield service uninstall
 
 
@@ -79,7 +87,7 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 
 > **注意**：使用 `watch` 或 `sweep --notify` 前，需先配置通知方式（email 或 webhook），否则只会输出日志不会发送通知。
 
-## curl webhook支持的模板变量
+### notify curl 命令可可用模板变量
 ```
 {{.Type}}      - 事件类型（login_success/login_failed）
 {{.User}}      - 登录用户名
@@ -101,17 +109,24 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 ```
 
 
-## systemctl操作和日志查看
+## systemctl和日志
 
 默认未配置通知渠道时，`watch`/`sweep` 仍会将监控结果输出到标准输出，可配合 systemd 日志留档。
 
 ```bash
-# 启用并启动服务
-sudo systemctl daemon-reload
+# 开启服务
+## systemd 重新加载配置
+# sudo systemctl daemon-reload
+## 同时启用服务的开机自启功能并立即启动该服务 
 sudo systemctl enable --now sshield-notify.service
 
-# 查看状态与日志
+# 查看systemctl状态
 sudo systemctl status sshield-notify
+
+# 重启服务
+sudo systemctl restart sshield-notify
+
+# 查看系统journalctl日志
 sudo journalctl -u sshield-notify -f
 ```
 
@@ -124,14 +139,13 @@ sudo journalctl -u sshield-notify -f
 * * * * * /usr/local/bin/sshield ssh sweep --since 90s --notify >> /var/log/sshield.log 2>&1
 ```
 
-## 许可证
-
-MIT License
-
-## 开发
-
-1. 构建
+## 构建
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w -extldflags "-static -fpic"' -o bin/sshield cmd/sshield/main.go
 ```
+
+## 许可证
+
+MIT License
+
