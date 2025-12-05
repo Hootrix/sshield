@@ -117,7 +117,7 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 {{.Location}}  - IP 地理位置
 {{.LogPath}}   - 日志来源路径
 {{.Message}}   - 原始日志消息
-{{.HostIP}}   - 主机 IP
+{{.HostIP}}    - 主机 IP
 ```
 
 支持`text/template`模板语法:
@@ -167,11 +167,28 @@ sudo journalctl -u ssh.service -n 20 --no-pager
 * * * * * /usr/local/bin/sshield ssh sweep --since 90s --notify >> /var/log/sshield.log 2>&1
 ```
 
-## 构建
+## 开发 
+
+### 构建
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w -extldflags "-static -fpic"' -o bin/sshield cmd/sshield/main.go
 ```
+
+### 发布流程
+
+提交 tag之后，GitHub CI自动发布
+```
+# 1. 合并到 main
+git checkout main
+git merge dev.20251205
+git push origin main
+
+# 2. 打 tag 触发自动发布
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 
 ## 许可证
 
