@@ -1,12 +1,12 @@
 <div align="center">
     <h1>SSHield</h1>
     <p>
-        SSHield 是 Linux 服务器SSH加固工具
+        Linux 服务器SSH加固工具
     </p>
 </div>
 
-> [!note]
-> Linux发行版测试覆盖不全，请保持谨慎
+> [!caution]
+> Linux 发行版兼容性尚未完全覆盖，生产环境请先测试验证
 
 ## 特性
 
