@@ -22,6 +22,21 @@
 
 ## 安装
 
+### 一键安装（推荐）
+
+```bash
+# 自动检测 安装到 /usr/local/bin
+sudo curl -Lo /usr/local/bin/sshield https://github.com/Hootrix/sshield/releases/latest/download/sshield-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && sudo chmod +x /usr/local/bin/sshield
+```
+
+### 手动下载
+
+从 [Releases](https://github.com/Hootrix/sshield/releases) 下载对应架构的二进制文件：
+- `sshield-linux-amd64` - x86_64 架构
+- `sshield-linux-arm64` - ARM64 架构
+
+### 从源码编译
+
 ```bash
 go install github.com/Hootrix/sshield/cmd/sshield@latest
 ```

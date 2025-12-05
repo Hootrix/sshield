@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=${GITHUB_SHA::8}
+          BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
+          go build -ldflags="-s -w \
+            -X 'github.com/Hootrix/sshield/internal/version.Version=${VERSION}' \
+            -X 'github.com/Hootrix/sshield/internal/version.CommitSHA=${COMMIT}' \
+            -X 'github.com/Hootrix/sshield/internal/version.BuildTime=${BUILD_TIME}'" \
+            -o sshield-${{ matrix.suffix }} ./cmd/sshield
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sshield-${{ matrix.suffix }}
+          path: sshield-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp artifacts/sshield-linux-amd64/sshield-linux-amd64 release/
+          cp artifacts/sshield-linux-arm64/sshield-linux-arm64 release/
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}
