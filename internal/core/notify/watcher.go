@@ -32,6 +32,15 @@ const journalHistoryTolerance = time.Minute
 // 事件去重：同一 IP+Port+User 在此时间窗口内只通知一次
 const eventDedupeWindow = 5 * time.Second
 
+// NotifyOn 控制通知哪些类型的事件
+type NotifyOn string
+
+const (
+	NotifyOnAll     NotifyOn = "all"
+	NotifyOnSuccess NotifyOn = "success"
+	NotifyOnFailed  NotifyOn = "failed"
+)
+
 // eventDeduper 用于去重短时间内的重复事件（如 VERBOSE 级别下 Failed + Disconnected）
 type eventDeduper struct {
 	seen map[string]time.Time
@@ -63,6 +72,103 @@ func (d *eventDeduper) isDuplicate(event *LoginEvent) bool {
 	return false
 }
 
+// failRateLimiter 限制每个 IP 在时间窗口内的失败通知数量
+type failRateLimiter struct {
+	limit  int           // 限制数量，0 表示不限制
+	window time.Duration // 时间窗口
+	counts map[string][]time.Time
+}
+
+func newFailRateLimiter(limit int, window time.Duration) *failRateLimiter {
+	return &failRateLimiter{
+		limit:  limit,
+		window: window,
+		counts: make(map[string][]time.Time),
+	}
+}
+
+// shouldLimit 检查是否应该限制该失败事件的通知，返回 true 表示应跳过
+func (r *failRateLimiter) shouldLimit(event *LoginEvent) bool {
+	if r.limit <= 0 || event.Type != EventLoginFailed {
+		return false
+	}
+
+	now := event.Timestamp
+	ip := event.IP
+
+	// 清理过期记录
+	if times, ok := r.counts[ip]; ok {
+		var valid []time.Time
+		for _, t := range times {
+			if now.Sub(t) < r.window {
+				valid = append(valid, t)
+			}
+		}
+		r.counts[ip] = valid
+	}
+
+	// 检查是否超过限制
+	if len(r.counts[ip]) >= r.limit {
+		debugf("notify: 失败通知限流，IP=%s 在 %v 内已达 %d 次", ip, r.window, r.limit)
+		return true
+	}
+
+	// 记录本次
+	r.counts[ip] = append(r.counts[ip], now)
+
+	// 定期清理长时间无活动的 IP
+	for k, times := range r.counts {
+		if len(times) == 0 || now.Sub(times[len(times)-1]) > r.window*2 {
+			delete(r.counts, k)
+		}
+	}
+
+	return false
+}
+
+// notifyFilter 组合去重和限流逻辑
+type notifyFilter struct {
+	notifyOn    NotifyOn
+	deduper     *eventDeduper
+	rateLimiter *failRateLimiter
+}
+
+func newNotifyFilter(notifyOn NotifyOn, failLimit int, failWindow time.Duration) *notifyFilter {
+	return &notifyFilter{
+		notifyOn:    notifyOn,
+		deduper:     newEventDeduper(),
+		rateLimiter: newFailRateLimiter(failLimit, failWindow),
+	}
+}
+
+// shouldNotify 检查是否应该发送通知
+func (f *notifyFilter) shouldNotify(event *LoginEvent) bool {
+	// 检查通知类型过滤
+	switch f.notifyOn {
+	case NotifyOnSuccess:
+		if event.Type != EventLoginSuccess {
+			return false
+		}
+	case NotifyOnFailed:
+		if event.Type != EventLoginFailed {
+			return false
+		}
+	}
+
+	// 检查去重
+	if f.deduper.isDuplicate(event) {
+		debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+		return false
+	}
+
+	// 检查限流
+	if f.rateLimiter.shouldLimit(event) {
+		return false
+	}
+
+	return true
+}
+
 // 解析 systemd journal 输出（journalctl -o json）的结构体
 type journalRecord struct {
 	Cursor     string `json:"__CURSOR"`
@@ -80,6 +186,9 @@ type WatchOptions struct {
 	LogPaths     []string
 	PollTimeout  time.Duration
 	DisplayLoc   *time.Location
+	NotifyOn     NotifyOn      // 通知类型：all/success/failed
+	FailLimit    int           // 每 IP 失败通知限制数量，0 表示不限制
+	FailWindow   time.Duration // 失败限制时间窗口
 }
 
 // SweepOptions 控制 sweep 模式行为
@@ -91,6 +200,9 @@ type SweepOptions struct {
 	Since        time.Duration
 	Notify       bool
 	DisplayLoc   *time.Location
+	NotifyOn     NotifyOn      // 通知类型：all/success/failed
+	FailLimit    int           // 每 IP 失败通知限制数量，0 表示不限制
+	FailWindow   time.Duration // 失败限制时间窗口
 }
 
 type sourceSelection struct {
@@ -104,6 +216,9 @@ type sourceSelection struct {
 func RunWatch(ctx context.Context, opts WatchOptions) error {
 	if opts.PollTimeout <= 0 {
 		opts.PollTimeout = 5 * time.Second
+	}
+	if opts.NotifyOn == "" {
+		opts.NotifyOn = NotifyOnAll
 	}
 
 	store, err := NewCursorStore(opts.CursorPath)
@@ -122,13 +237,20 @@ func RunWatch(ctx context.Context, opts WatchOptions) error {
 	}
 
 	fmt.Printf(">>> 监听模式：%s\n", selection.Description)
+	if opts.NotifyOn != NotifyOnAll {
+		fmt.Printf(">>> 通知过滤：%s\n", opts.NotifyOn)
+	}
+	if opts.FailLimit > 0 {
+		fmt.Printf(">>> 失败限流：每 IP %d 次 / %v\n", opts.FailLimit, opts.FailWindow)
+	}
 	loc := normalizeLocation(opts.DisplayLoc)
+	filter := newNotifyFilter(opts.NotifyOn, opts.FailLimit, opts.FailWindow)
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, opts.PollTimeout, true, 0, loc, true)
+		return runJournalWithFilter(ctx, store, state, selection.Units, opts.PollTimeout, true, 0, loc, true, filter)
 	case sourceFile:
-		return followLogFile(ctx, store, state, selection.LogPath, opts.PollTimeout, loc)
+		return followLogFileWithFilter(ctx, store, state, selection.LogPath, opts.PollTimeout, loc, filter)
 	default:
 		return fmt.Errorf("未知监听源: %s", selection.Source)
 	}
@@ -136,6 +258,10 @@ func RunWatch(ctx context.Context, opts WatchOptions) error {
 
 // RunSweep 处理近期 SSH 登录事件后退出
 func RunSweep(ctx context.Context, opts SweepOptions) error {
+	if opts.NotifyOn == "" {
+		opts.NotifyOn = NotifyOnAll
+	}
+
 	store, err := NewCursorStore(opts.CursorPath)
 	if err != nil {
 		return err
@@ -152,13 +278,23 @@ func RunSweep(ctx context.Context, opts SweepOptions) error {
 	}
 
 	fmt.Printf(">>> 扫描模式：%s\n", selection.Description)
+	if opts.Notify && opts.NotifyOn != NotifyOnAll {
+		fmt.Printf(">>> 通知过滤：%s\n", opts.NotifyOn)
+	}
+	if opts.Notify && opts.FailLimit > 0 {
+		fmt.Printf(">>> 失败限流：每 IP %d 次 / %v\n", opts.FailLimit, opts.FailWindow)
+	}
 	loc := normalizeLocation(opts.DisplayLoc)
+	var filter *notifyFilter
+	if opts.Notify {
+		filter = newNotifyFilter(opts.NotifyOn, opts.FailLimit, opts.FailWindow)
+	}
 
 	switch selection.Source {
 	case sourceJournal:
-		return runJournal(ctx, store, state, selection.Units, 0, false, opts.Since, loc, opts.Notify)
+		return runJournalWithFilter(ctx, store, state, selection.Units, 0, false, opts.Since, loc, opts.Notify, filter)
 	case sourceFile:
-		return sweepLogFile(ctx, store, state, selection.LogPath, opts.Since, loc, opts.Notify)
+		return sweepLogFileWithFilter(ctx, store, state, selection.LogPath, opts.Since, loc, opts.Notify, filter)
 	default:
 		return fmt.Errorf("未知监听源: %s", selection.Source)
 	}
@@ -246,6 +382,7 @@ func determineSource(source string, units, paths []string, state *SourceState, s
 
 func probeJournal(units []string, state *SourceState, since time.Duration) (bool, int) {
 	if _, err := exec.LookPath("journalctl"); err != nil {
+		debugf("notify: journalctl not found")
 		return false, 0
 	}
 
@@ -264,14 +401,18 @@ func probeJournal(units []string, state *SourceState, since time.Duration) (bool
 		args = append(args, "-u", unit)
 	}
 
+	debugf("notify: probeJournal cmd: journalctl %v", args)
+
 	cmd := exec.Command("journalctl", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		debugf("notify: probeJournal stdout pipe error: %v", err)
 		return false, 0
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
+		debugf("notify: probeJournal start error: %v", err)
 		return false, 0
 	}
 
@@ -279,22 +420,30 @@ func probeJournal(units []string, state *SourceState, since time.Duration) (bool
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 	count := 0
+	totalLines := 0
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
+		totalLines++
 		var record journalRecord
 		if err := json.Unmarshal(line, &record); err != nil {
+			debugf("notify: probeJournal json parse error: %v", err)
 			continue
 		}
 		ts := parseRealtime(record.RealtimeTS)
+		debugf("notify: probeJournal message: %s", record.Message)
 		if _, ok := parseJournalMessage(record.Message, record.Hostname, ts); ok {
 			count++
 			break
 		}
 	}
 	_ = cmd.Wait()
+	if stderr.Len() > 0 {
+		debugf("notify: probeJournal stderr: %s", stderr.String())
+	}
+	debugf("notify: probeJournal result: totalLines=%d, matchedCount=%d", totalLines, count)
 	return true, count
 }
 
@@ -310,14 +459,17 @@ func firstExisting(paths []string) (string, bool) {
 	return "", false
 }
 
-func runJournal(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration, loc *time.Location, notify bool) error {
+func runJournalWithFilter(ctx context.Context, store *CursorStore, state *SourceState, units []string, poll time.Duration, follow bool, since time.Duration, loc *time.Location, notify bool, filter *notifyFilter) error {
 	if state == nil {
 		state = &SourceState{}
 	}
 
 	startTime := time.Now()
 	skipHistorical := follow && state.JournalCursor == "" && since <= 0
-	deduper := newEventDeduper()
+	// 如果没有 filter，创建一个默认的（兼容旧调用）
+	if filter == nil {
+		filter = newNotifyFilter(NotifyOnAll, 0, 0)
+	}
 
 	args := []string{"--no-pager", "-o", "json"}
 	if follow {
@@ -401,9 +553,10 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 			event.LogPath = "journald"
 		}
 
-		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
-		if deduper.isDuplicate(event) {
-			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+		// 使用 filter 检查是否应该发送通知
+		shouldSend := notify && filter.shouldNotify(event)
+		if notify && !shouldSend {
+			// 更新游标但不发送通知
 			state.JournalCursor = record.Cursor
 			if err := store.Save(state); err != nil {
 				log.Printf("写入状态失败: %v", err)
@@ -411,12 +564,10 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 			continue
 		}
 
-		if notify {
+		if shouldSend {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
 			}
-		} else {
-			debugf("notify: sweep 跳过通知 event type=%s host=%s", event.Type, event.Hostname)
 		}
 
 		printEventSummary(*event, loc)
@@ -448,7 +599,7 @@ func shouldSkipHistoricalEvent(start, event time.Time) bool {
 	return event.Before(start.Add(-journalHistoryTolerance))
 }
 
-func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, poll time.Duration, loc *time.Location) error {
+func followLogFileWithFilter(ctx context.Context, store *CursorStore, state *SourceState, path string, poll time.Duration, loc *time.Location, filter *notifyFilter) error {
 	if poll <= 0 {
 		poll = time.Second
 	}
@@ -458,12 +609,14 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 		offset = 0
 	}
 
-	deduper := newEventDeduper()
+	if filter == nil {
+		filter = newNotifyFilter(NotifyOnAll, 0, 0)
+	}
+
 	process := func(event *LoginEvent, newOffset int64) {
 		event.LogPath = path
-		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
-		if deduper.isDuplicate(event) {
-			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+		// 使用 filter 检查是否应该发送通知
+		if !filter.shouldNotify(event) {
 			offset = newOffset
 			state.FileOffsets[path] = offset
 			if err := store.Save(state); err != nil {
@@ -500,7 +653,7 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 	}
 }
 
-func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, path string, since time.Duration, loc *time.Location, notify bool) error {
+func sweepLogFileWithFilter(ctx context.Context, store *CursorStore, state *SourceState, path string, since time.Duration, loc *time.Location, notify bool, filter *notifyFilter) error {
 	offset := state.FileOffsets[path]
 	startOffset := offset
 	cutoff := time.Time{}
@@ -509,8 +662,11 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 		cutoff = time.Now().Add(-since)
 	}
 
+	if filter == nil {
+		filter = newNotifyFilter(NotifyOnAll, 0, 0)
+	}
+
 	latest := offset
-	deduper := newEventDeduper()
 	process := func(event *LoginEvent, newOffset int64) {
 		if newOffset > latest {
 			latest = newOffset
@@ -519,17 +675,12 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 			return
 		}
 		event.LogPath = path
-		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
-		if deduper.isDuplicate(event) {
-			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
-			return
-		}
-		if notify {
+		// 使用 filter 检查是否应该发送通知
+		shouldSend := notify && filter.shouldNotify(event)
+		if shouldSend {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
 			}
-		} else {
-			debugf("notify: sweep 跳过通知 event type=%s host=%s", event.Type, event.Hostname)
 		}
 		printEventSummary(*event, loc)
 	}

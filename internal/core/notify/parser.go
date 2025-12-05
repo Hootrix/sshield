@@ -19,7 +19,9 @@ var (
 	// 匹配: "Disconnected from authenticating user root 1.1.1.1 port 51819 [preauth]"
 	disconnectAuthRe = regexp.MustCompile(`^Disconnected from authenticating user (\S+) ([^ ]+) port (\d+)`)
 	// 匹配: "Connection closed by 17.11.1.1 port 25124 [preauth]"
-	connectionClosedRe = regexp.MustCompile(`^Connection closed by (?:authenticating user (\S+) )?([^ ]+) port (\d+)`)
+	// 匹配: "Connection closed by authenticating user root 1.1.1.1 port 25124 [preauth]"
+	// 匹配: "Connection closed by invalid user tomcat 16.17.3.1 port 39352 [preauth]"
+	connectionClosedRe = regexp.MustCompile(`^Connection closed by (?:(?:authenticating|invalid) user (\S+) )?([^ ]+) port (\d+)`)
 )
 
 func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool) {

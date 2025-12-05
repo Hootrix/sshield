@@ -18,6 +18,7 @@ const (
 
 // serviceTemplate 是 systemd service 文件模板
 // StartLimitIntervalSec/StartLimitBurst 放在 [Unit] 段以兼容旧版 systemd (< 229)
+// %s 占位符：1=二进制路径, 2=额外参数
 const serviceTemplate = `[Unit]
 Description=SSHield SSH login watcher
 After=network.target syslog.target
@@ -26,7 +27,7 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=%s ssh watch
+ExecStart=%s ssh watch%s
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -36,6 +37,13 @@ SyslogIdentifier=sshield
 [Install]
 WantedBy=multi-user.target
 `
+
+// installOptions 安装选项
+type installOptions struct {
+	notifyOn   string
+	failLimit  int
+	failWindow string
+}
 
 // NewCommand 返回 service 子命令
 func NewCommand() *cobra.Command {
@@ -54,15 +62,41 @@ func NewCommand() *cobra.Command {
 }
 
 func newInstallCommand() *cobra.Command {
-	return &cobra.Command{
+	var opts installOptions
+
+	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "安装 systemd 服务（需要 root 权限）",
 		Long: `安装 sshield-notify.service 到 systemd。
+
+通知过滤选项：
+  --notify-on success    只通知登录成功（推荐，减少打扰）
+  --notify-on failed     只通知登录失败
+  --notify-on all        通知所有事件（默认）
+
+失败限流选项：
+  --fail-limit 5 --fail-window 1h   每个 IP 每小时最多 5 条失败通知
+
+示例：
+  # 只通知成功登录
+  sudo sshield service install --notify-on success
+
+  # 通知所有，但限制失败通知频率
+  sudo sshield service install --fail-limit 3 --fail-window 1h
+
 安装后需手动启动：
   sudo systemctl start sshield-notify
   sudo systemctl enable sshield-notify`,
-		RunE: runInstall,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInstallWithOptions(opts)
+		},
 	}
+
+	cmd.Flags().StringVar(&opts.notifyOn, "notify-on", "all", "通知类型：all｜success｜failed")
+	cmd.Flags().IntVar(&opts.failLimit, "fail-limit", 0, "每个 IP 失败通知限制数量（0 表示不限制）")
+	cmd.Flags().StringVar(&opts.failWindow, "fail-window", "1h", "失败限制时间窗口（支持 s/m/h/d/w/M）")
+
+	return cmd
 }
 
 func newUninstallCommand() *cobra.Command {
@@ -81,7 +115,7 @@ func newStatusCommand() *cobra.Command {
 	}
 }
 
-func runInstall(cmd *cobra.Command, args []string) error {
+func runInstallWithOptions(opts installOptions) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("systemd 服务仅支持 Linux 系统")
 	}
@@ -104,8 +138,23 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("解析可执行文件路径失败: %w", err)
 	}
 
+	// 构建额外参数
+	var extraArgs []string
+	if opts.notifyOn != "" && opts.notifyOn != "all" {
+		extraArgs = append(extraArgs, fmt.Sprintf("--notify-on %s", opts.notifyOn))
+	}
+	if opts.failLimit > 0 {
+		extraArgs = append(extraArgs, fmt.Sprintf("--fail-limit %d", opts.failLimit))
+		extraArgs = append(extraArgs, fmt.Sprintf("--fail-window %s", opts.failWindow))
+	}
+
+	extraArgsStr := ""
+	if len(extraArgs) > 0 {
+		extraArgsStr = " " + strings.Join(extraArgs, " ")
+	}
+
 	// 生成 service 文件内容
-	content := fmt.Sprintf(serviceTemplate, execPath)
+	content := fmt.Sprintf(serviceTemplate, execPath, extraArgsStr)
 
 	// 检查是否已存在
 	if _, err := os.Stat(serviceFilePath); err == nil {
@@ -119,6 +168,14 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("写入服务文件失败: %w", err)
 	}
 	fmt.Printf("✓ 已创建服务文件: %s\n", serviceFilePath)
+
+	// 显示配置的参数
+	if opts.notifyOn != "all" {
+		fmt.Printf("  通知类型: %s\n", opts.notifyOn)
+	}
+	if opts.failLimit > 0 {
+		fmt.Printf("  失败限流: 每 IP %d 次 / %s\n", opts.failLimit, opts.failWindow)
+	}
 
 	// 重新加载 systemd
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {

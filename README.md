@@ -137,6 +137,10 @@ sudo systemctl restart sshield-notify
 
 # 查看系统journalctl日志
 sudo journalctl -u sshield-notify -f
+
+# 查看系统ssh日志
+sudo journalctl -u ssh.service -n 20 --no-pager
+
 ```
 
 ### cron 兜底

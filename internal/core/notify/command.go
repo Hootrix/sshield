@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -192,17 +193,32 @@ func applyEmailEnvDefaults(cmd *cobra.Command) error {
 // NewWatchCommand 返回 watch 子命令，用于持续监控 SSH 登录事件。
 func NewWatchCommand() *cobra.Command {
 	var (
-		stateFile string
-		poll      time.Duration
-		source    string
-		units     []string
-		logs      []string
-		timezone  string
+		stateFile     string
+		poll          time.Duration
+		source        string
+		units         []string
+		logs          []string
+		timezone      string
+		notifyOnStr   string
+		failLimit     int
+		failWindowStr string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "watch",
 		Short: "持续监控 SSH 登录并发送通知",
+		Long: `持续监控 SSH 登录并发送通知
+
+通知过滤选项：
+  --notify-on success    只通知登录成功
+  --notify-on failed     只通知登录失败
+  --notify-on all        通知所有事件（默认）
+
+失败限流选项（减少攻击造成的打扰）：
+  --fail-limit 5 --fail-window 1h   每个 IP 每小时最多 5 条失败通知
+
+时间窗口格式：
+  30s, 5m, 1h, 1d (天), 1w (周), 1M (月)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stateFile == "" {
 				var err error
@@ -227,6 +243,16 @@ func NewWatchCommand() *cobra.Command {
 				return err
 			}
 
+			notifyOn, err := parseNotifyOn(notifyOnStr)
+			if err != nil {
+				return err
+			}
+
+			failWindow, err := parseDurationExtended(failWindowStr)
+			if err != nil {
+				return err
+			}
+
 			opts := WatchOptions{
 				CursorPath:   stateFile,
 				PollTimeout:  poll,
@@ -234,6 +260,9 @@ func NewWatchCommand() *cobra.Command {
 				JournalUnits: units,
 				LogPaths:     logs,
 				DisplayLoc:   loc,
+				NotifyOn:     notifyOn,
+				FailLimit:    failLimit,
+				FailWindow:   failWindow,
 			}
 			return RunWatch(ctx, opts)
 		},
@@ -245,6 +274,9 @@ func NewWatchCommand() *cobra.Command {
 	cmd.Flags().StringSliceVar(&units, "journal-unit", nil, "需要监听的 Journal 单元名（可重复，默认 sshd.service｜ssh.service）")
 	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要跟踪的认证日志路径（可重复，默认 /var/log/auth.log、/var/log/secure）")
 	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'，默认 Asia/Shanghai）")
+	cmd.Flags().StringVar(&notifyOnStr, "notify-on", "all", "通知类型：all｜success｜failed（默认 all）")
+	cmd.Flags().IntVar(&failLimit, "fail-limit", 0, "每个 IP 失败通知限制数量（0 表示不限制）")
+	cmd.Flags().StringVar(&failWindowStr, "fail-window", "1h", "失败限制时间窗口（支持 s/m/h/d/w/M）")
 
 	return cmd
 }
@@ -252,18 +284,30 @@ func NewWatchCommand() *cobra.Command {
 // NewSweepCommand 返回 sweep 子命令，用于一次性扫描 SSH 登录事件。
 func NewSweepCommand() *cobra.Command {
 	var (
-		stateFile string
-		since     time.Duration
-		source    string
-		units     []string
-		logs      []string
-		timezone  string
-		notify    bool
+		stateFile     string
+		since         time.Duration
+		source        string
+		units         []string
+		logs          []string
+		timezone      string
+		notify        bool
+		notifyOnStr   string
+		failLimit     int
+		failWindowStr string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "sweep",
 		Short: "单次检查最近SSH登录",
+		Long: `单次检查最近 SSH 登录事件
+
+通知过滤选项（仅在 --notify 时生效）：
+  --notify-on success    只通知登录成功
+  --notify-on failed     只通知登录失败
+  --notify-on all        通知所有事件（默认）
+
+失败限流选项：
+  --fail-limit 5 --fail-window 1h   每个 IP 每小时最多 5 条失败通知`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stateFile == "" {
 				var err error
@@ -281,6 +325,16 @@ func NewSweepCommand() *cobra.Command {
 				return err
 			}
 
+			notifyOn, err := parseNotifyOn(notifyOnStr)
+			if err != nil {
+				return err
+			}
+
+			failWindow, err := parseDurationExtended(failWindowStr)
+			if err != nil {
+				return err
+			}
+
 			opts := SweepOptions{
 				CursorPath:   stateFile,
 				Since:        since,
@@ -289,6 +343,9 @@ func NewSweepCommand() *cobra.Command {
 				LogPaths:     logs,
 				Notify:       notify,
 				DisplayLoc:   loc,
+				NotifyOn:     notifyOn,
+				FailLimit:    failLimit,
+				FailWindow:   failWindow,
 			}
 			return runSweepFunc(ctx, opts)
 		},
@@ -301,6 +358,9 @@ func NewSweepCommand() *cobra.Command {
 	cmd.Flags().StringSliceVar(&logs, "log-path", nil, "需要扫描的 SSH 认证日志路径（可重复，默认 /var/log/auth.log、/var/log/secure）")
 	cmd.Flags().StringVar(&timezone, "timezone", "Asia/Shanghai", "显示使用的时区（示例：'Asia/Shanghai'｜'Local'，默认 Asia/Shanghai）")
 	cmd.Flags().BoolVar(&notify, "notify", false, "是否发送通知（默认仅输出到控制台）")
+	cmd.Flags().StringVar(&notifyOnStr, "notify-on", "all", "通知类型：all｜success｜failed（默认 all）")
+	cmd.Flags().IntVar(&failLimit, "fail-limit", 0, "每个 IP 失败通知限制数量（0 表示不限制）")
+	cmd.Flags().StringVar(&failWindowStr, "fail-window", "1h", "失败限制时间窗口（支持 s/m/h/d/w/M）")
 
 	return cmd
 }
@@ -543,4 +603,55 @@ func resolveLocation(name string) (*time.Location, error) {
 		return nil, fmt.Errorf("无法识别的时区 %q: %w", name, err)
 	}
 	return loc, nil
+}
+
+// parseDurationExtended 解析扩展的时间窗口格式
+// 支持: 30s, 5m, 1h, 1d, 1M (月), 1w (周)
+func parseDurationExtended(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+
+	// 尝试标准 Go duration 解析
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+
+	// 扩展格式解析
+	if len(s) < 2 {
+		return 0, fmt.Errorf("无效的时间格式: %s", s)
+	}
+
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0, fmt.Errorf("无效的时间格式: %s", s)
+	}
+
+	switch unit {
+	case 'd', 'D':
+		return time.Duration(num) * 24 * time.Hour, nil
+	case 'w', 'W':
+		return time.Duration(num) * 7 * 24 * time.Hour, nil
+	case 'M':
+		return time.Duration(num) * 30 * 24 * time.Hour, nil // 近似 30 天
+	default:
+		return 0, fmt.Errorf("无效的时间单位: %c（支持 s/m/h/d/w/M）", unit)
+	}
+}
+
+// parseNotifyOn 解析通知类型参数
+func parseNotifyOn(s string) (NotifyOn, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "all", "":
+		return NotifyOnAll, nil
+	case "success":
+		return NotifyOnSuccess, nil
+	case "failed", "fail":
+		return NotifyOnFailed, nil
+	default:
+		return "", fmt.Errorf("无效的通知类型: %s（支持 all/success/failed）", s)
+	}
 }
