@@ -27,6 +27,7 @@ type LoginEvent struct {
 	Location  string    // IP地理位置（可选）
 	LogPath   string    // 日志来源路径（文件路径或 journald 单元）
 	Message   string    // 原始日志消息
+	HostIP    string    // 当前主机 IP（优先 IPv4）
 }
 
 // Notifier 定义通知接口
@@ -39,13 +40,43 @@ type Notifier interface {
 
 // Config 通知配置
 type Config struct {
-	Enabled    bool   `json:"enabled" yaml:"enabled"`
-	Type       string `json:"type" yaml:"type"`
-	WebhookURL string `json:"webhook_url,omitempty" yaml:"webhook_url,omitempty"`
-	EmailTo    string `json:"email_to,omitempty" yaml:"email_to,omitempty"`
-	EmailFrom  string `json:"email_from,omitempty" yaml:"email_from,omitempty"`
-	SMTPServer string `json:"smtp_server,omitempty" yaml:"smtp_server,omitempty"`
-	SMTPPort   int    `json:"smtp_port,omitempty" yaml:"smtp_port,omitempty"`
-	SMTPUser   string `json:"smtp_user,omitempty" yaml:"smtp_user,omitempty"`
-	SMTPPass   string `json:"smtp_pass,omitempty" yaml:"smtp_pass,omitempty"`
+	Channels []ChannelConfig `json:"channels" yaml:"channels"`
+}
+
+// ChannelConfig 单个通知渠道配置
+type ChannelConfig struct {
+	Name    string `json:"name,omitempty" yaml:"name,omitempty"` // 渠道名称（可选，用于显示）
+	Enabled bool   `json:"enabled" yaml:"enabled"`               // 是否启用
+	Type    string `json:"type" yaml:"type"`                     // 类型：curl/email
+
+	// 不同类型的配置，根据 Type 使用对应字段
+	Curl  *CurlConfig  `json:"curl,omitempty" yaml:"curl,omitempty"`
+	Email *EmailConfig `json:"email,omitempty" yaml:"email,omitempty"`
+}
+
+// CurlConfig 自定义 Curl 通知配置
+// 支持模板变量：{{.Type}} {{.User}} {{.IP}} {{.Port}} {{.Method}} {{.Hostname}} {{.Timestamp}} {{.Location}} {{.LogPath}} {{.Message}}
+type CurlConfig struct {
+	Command string `json:"command" yaml:"command"`
+}
+
+// EmailConfig 邮件通知配置
+type EmailConfig struct {
+	To     string `json:"to" yaml:"to"`
+	From   string `json:"from" yaml:"from"`
+	Server string `json:"server" yaml:"server"`
+	Port   int    `json:"port" yaml:"port"`
+	User   string `json:"user" yaml:"user"`
+	Pass   string `json:"pass" yaml:"pass"`
+}
+
+// GetEnabledChannels 获取所有启用的渠道配置
+func (c *Config) GetEnabledChannels() []ChannelConfig {
+	var channels []ChannelConfig
+	for _, ch := range c.Channels {
+		if ch.Enabled {
+			channels = append(channels, ch)
+		}
+	}
+	return channels
 }

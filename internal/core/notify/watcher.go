@@ -29,6 +29,40 @@ var (
 
 const journalHistoryTolerance = time.Minute
 
+// 事件去重：同一 IP+Port+User 在此时间窗口内只通知一次
+const eventDedupeWindow = 5 * time.Second
+
+// eventDeduper 用于去重短时间内的重复事件（如 VERBOSE 级别下 Failed + Disconnected）
+type eventDeduper struct {
+	seen map[string]time.Time
+}
+
+func newEventDeduper() *eventDeduper {
+	return &eventDeduper{seen: make(map[string]time.Time)}
+}
+
+// isDuplicate 检查事件是否为重复事件，返回 true 表示应跳过
+func (d *eventDeduper) isDuplicate(event *LoginEvent) bool {
+	// 只对失败事件去重（成功事件不会重复）
+	if event.Type != EventLoginFailed {
+		return false
+	}
+	key := fmt.Sprintf("%s:%d:%s", event.IP, event.Port, event.User)
+	if lastSeen, ok := d.seen[key]; ok {
+		if event.Timestamp.Sub(lastSeen) < eventDedupeWindow {
+			return true
+		}
+	}
+	d.seen[key] = event.Timestamp
+	// 清理过期条目（简单实现，避免内存泄漏）
+	for k, t := range d.seen {
+		if event.Timestamp.Sub(t) > eventDedupeWindow*10 {
+			delete(d.seen, k)
+		}
+	}
+	return false
+}
+
 // 解析 systemd journal 输出（journalctl -o json）的结构体
 type journalRecord struct {
 	Cursor     string `json:"__CURSOR"`
@@ -283,6 +317,7 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 
 	startTime := time.Now()
 	skipHistorical := follow && state.JournalCursor == "" && since <= 0
+	deduper := newEventDeduper()
 
 	args := []string{"--no-pager", "-o", "json"}
 	if follow {
@@ -366,6 +401,16 @@ func runJournal(ctx context.Context, store *CursorStore, state *SourceState, uni
 			event.LogPath = "journald"
 		}
 
+		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
+		if deduper.isDuplicate(event) {
+			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+			state.JournalCursor = record.Cursor
+			if err := store.Save(state); err != nil {
+				log.Printf("写入状态失败: %v", err)
+			}
+			continue
+		}
+
 		if notify {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
@@ -413,8 +458,19 @@ func followLogFile(ctx context.Context, store *CursorStore, state *SourceState, 
 		offset = 0
 	}
 
+	deduper := newEventDeduper()
 	process := func(event *LoginEvent, newOffset int64) {
 		event.LogPath = path
+		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
+		if deduper.isDuplicate(event) {
+			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+			offset = newOffset
+			state.FileOffsets[path] = offset
+			if err := store.Save(state); err != nil {
+				log.Printf("写入状态失败: %v", err)
+			}
+			return
+		}
 		if err := dispatchEvent(event); err != nil {
 			log.Printf("发送通知失败: %v", err)
 		}
@@ -454,6 +510,7 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 	}
 
 	latest := offset
+	deduper := newEventDeduper()
 	process := func(event *LoginEvent, newOffset int64) {
 		if newOffset > latest {
 			latest = newOffset
@@ -462,6 +519,11 @@ func sweepLogFile(ctx context.Context, store *CursorStore, state *SourceState, p
 			return
 		}
 		event.LogPath = path
+		// 去重：同一 IP+Port+User 在短时间窗口内只处理一次
+		if deduper.isDuplicate(event) {
+			debugf("notify: 跳过重复事件 %s@%s:%d", event.User, event.IP, event.Port)
+			return
+		}
 		if notify {
 			if err := dispatchEvent(event); err != nil {
 				log.Printf("发送通知失败: %v", err)
@@ -586,16 +648,31 @@ func dispatchEvent(event *LoginEvent) error {
 		}
 		return fmt.Errorf("读取通知配置失败: %w", err)
 	}
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil
 	}
 
-	notifier, err := buildNotifier(*cfg)
-	if err != nil {
-		return err
+	channels := cfg.GetEnabledChannels()
+	if len(channels) == 0 {
+		return nil
 	}
 
-	return notifier.Send(*event)
+	var errs []error
+	for _, ch := range channels {
+		notifier, err := buildChannelNotifier(ch)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", channelDisplayName(ch), err))
+			continue
+		}
+		if err := notifier.Send(*event); err != nil {
+			errs = append(errs, fmt.Errorf("渠道 %s: %w", channelDisplayName(ch), err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("部分通知失败: %v", errs)
+	}
+	return nil
 }
 
 func normalizeLocation(loc *time.Location) *time.Location {
@@ -604,14 +681,22 @@ func normalizeLocation(loc *time.Location) *time.Location {
 	}
 	return loc
 }
-func buildNotifier(cfg Config) (Notifier, error) {
-	switch strings.ToLower(cfg.Type) {
-	case "webhook":
-		return NewWebhookNotifier(cfg.WebhookURL), nil
+
+// buildChannelNotifier 根据渠道配置构建通知器
+func buildChannelNotifier(ch ChannelConfig) (Notifier, error) {
+	switch strings.ToLower(ch.Type) {
+	case "curl":
+		if ch.Curl == nil {
+			return nil, fmt.Errorf("curl 配置为空")
+		}
+		return NewCurlNotifier(ch.Curl.Command)
 	case "email":
-		return NewEmailNotifier(cfg), nil
+		if ch.Email == nil {
+			return nil, fmt.Errorf("email 配置为空")
+		}
+		return NewEmailNotifierFromChannel(ch.Email), nil
 	default:
-		return nil, fmt.Errorf("未知通知类型: %s", cfg.Type)
+		return nil, fmt.Errorf("未知通知类型: %s", ch.Type)
 	}
 }
 

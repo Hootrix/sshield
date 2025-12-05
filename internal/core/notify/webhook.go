@@ -1,9 +1,6 @@
 package notify
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,83 +8,66 @@ import (
 	"time"
 )
 
-type WebhookNotifier struct {
-	URL        string
+// CurlNotifier 使用自定义 curl 命令的通知器
+type CurlNotifier struct {
+	curlCmd    string
+	parsedCurl *CurlRequest
 	httpClient *http.Client
 }
 
-type webhookMessage struct {
-	MsgType string `json:"msgtype"`
-	Text    struct {
-		Content string `json:"content"`
-	} `json:"text"`
-}
+// NewCurlNotifier 创建基于 curl 命令的通知器
+func NewCurlNotifier(curlCmd string) (*CurlNotifier, error) {
+	parsed, err := ParseCurl(curlCmd)
+	if err != nil {
+		return nil, fmt.Errorf("解析 curl 命令失败: %w", err)
+	}
 
-// NewWebhookNotifier creates a new webhook notifier with timeout
-func NewWebhookNotifier(url string) *WebhookNotifier {
-	return &WebhookNotifier{
-		URL: url,
+	return &CurlNotifier{
+		curlCmd:    curlCmd,
+		parsedCurl: parsed,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-	}
+	}, nil
 }
 
-// Send sends a notification via webhook
-func (w *WebhookNotifier) Send(event LoginEvent) error {
-	if w.URL == "" {
-		return &ConfigError{
-			Field:   "webhook_url",
-			Message: "webhook URL is empty",
-		}
+// Send 使用 curl 命令发送通知
+func (c *CurlNotifier) Send(event LoginEvent) error {
+	// 构建模板数据
+	data := map[string]any{
+		"Type":      event.Type,
+		"User":      event.User,
+		"IP":        event.IP,
+		"Port":      event.Port,
+		"Method":    event.Method,
+		"Hostname":  event.Hostname,
+		"Timestamp": formatShanghaiRFC3339(event.Timestamp),
+		"Location":  event.Location,
+		"LogPath":   event.LogPath,
+		"Message":   event.Message,
+		"HostIP":    event.HostIP,
 	}
 
-	msg := webhookMessage{
-		MsgType: "text",
-		Text: struct {
-			Content string `json:"content"`
-		}{
-			Content: formatLoginMessage(event),
-		},
-	}
-
-	jsonData, err := json.Marshal(msg)
+	resp, err := c.parsedCurl.Execute(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal webhook message: %w", err)
-	}
-
-	// 创建带有超时的上下文
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", w.URL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := w.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send webhook: %w", err)
+		return fmt.Errorf("执行 curl 请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("webhook request failed with status %d: %s", resp.StatusCode, string(body))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("请求失败，状态码 %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
 }
 
-// Test tests the webhook configuration
-func (w *WebhookNotifier) Test() error {
+// Test 测试 curl 配置
+func (c *CurlNotifier) Test() error {
 	testEvent := LoginEvent{
 		Type:      "test",
 		User:      "test_user",
@@ -98,8 +78,8 @@ func (w *WebhookNotifier) Test() error {
 		LogPath:   "-",
 	}
 
-	if err := w.Send(testEvent); err != nil {
-		return fmt.Errorf("webhook test failed: %w", err)
+	if err := c.Send(testEvent); err != nil {
+		return fmt.Errorf("curl webhook 测试失败: %w", err)
 	}
 
 	return nil
@@ -156,48 +136,100 @@ func formatLoginMessage(event LoginEvent) string {
 		message)
 }
 
-// configureWebhook configures and tests the webhook notification
-func configureWebhook(url string, insecure bool) error {
-	if !insecure && strings.HasPrefix(url, "http://") {
-		return fmt.Errorf("请使用 HTTPS Webhook，或显式添加 --insecure 允许 HTTP")
-	}
-
-	// 创建配置管理器
-	cm := NewConfigManager()
-
-	// 创建新的配置
-	cfg := Config{
-		Enabled:    true,
-		Type:       "webhook",
-		WebhookURL: url,
-	}
-
-	// 验证配置
-	if err := ValidateConfig(&cfg); err != nil {
+// configureCurl 配置基于 curl 命令的通知
+func configureCurl(curlCmd, name string) error {
+	// 解析并验证 curl 命令
+	notifier, err := NewCurlNotifier(curlCmd)
+	if err != nil {
 		return err
 	}
 
-	// 测试 webhook
-	notifier := NewWebhookNotifier(url)
+	// 测试 curl
+	fmt.Println("正在测试 curl 命令...")
 	if err := notifier.Test(); err != nil {
 		return err
 	}
+	fmt.Println("✓ 测试成功")
 
-	// 备份当前配置
+	// 如果未指定 name，生成默认名称
+	if name == "" {
+		name = generateChannelName("curl")
+	}
+
+	// 创建渠道配置
+	channel := ChannelConfig{
+		Name:    name,
+		Enabled: true,
+		Type:    "curl",
+		Curl:    &CurlConfig{Command: curlCmd},
+	}
+
+	return addOrUpdateChannel(channel)
+}
+
+// addOrUpdateChannel 添加或更新渠道配置（按 Name 判断是否为同一渠道）
+func addOrUpdateChannel(newChannel ChannelConfig) error {
+	cm := NewConfigManager()
+
+	// 加载现有配置
+	cfg, err := cm.LoadConfig()
+	if err != nil {
+		if err != ErrConfigNotFound {
+			return fmt.Errorf("加载配置失败: %w", err)
+		}
+		cfg = &Config{}
+	}
+
+	// 按 Name 查找是否已存在，存在则更新
+	found := false
+	for i, ch := range cfg.Channels {
+		if ch.Name != "" && ch.Name == newChannel.Name {
+			cfg.Channels[i] = newChannel
+			found = true
+			fmt.Printf("✓ 已更新渠道: %s\n", newChannel.Name)
+			break
+		}
+	}
+
+	// 如果不存在则添加
+	if !found {
+		cfg.Channels = append(cfg.Channels, newChannel)
+		fmt.Printf("✓ 已添加渠道: %s\n", newChannel.Name)
+	}
+
+	// 备份并保存
 	if cm.configExists() {
 		if err := cm.BackupConfig(); err != nil {
-			return fmt.Errorf("failed to backup existing config: %w", err)
+			return fmt.Errorf("备份配置失败: %w", err)
 		}
 	}
 
-	// 保存新配置
-	if err := cm.SaveConfig(cfg); err != nil {
-		// 如果保存失败，尝试恢复备份
+	if err := cm.SaveConfig(*cfg); err != nil {
 		if restoreErr := cm.RestoreConfig(); restoreErr != nil {
-			return fmt.Errorf("failed to save config and restore backup: %v (original error: %w)", restoreErr, err)
+			return fmt.Errorf("保存失败且恢复失败: %v (原始错误: %w)", restoreErr, err)
 		}
-		return fmt.Errorf("failed to save config: %w", err)
+		return fmt.Errorf("保存配置失败: %w", err)
 	}
 
+	fmt.Println("✓ 配置已保存")
 	return nil
+}
+
+// channelDisplayName 获取渠道显示名称
+func channelDisplayName(ch ChannelConfig) string {
+	if ch.Name != "" {
+		return ch.Name
+	}
+	return ch.Type
+}
+
+// generateChannelName 生成默认渠道名称
+func generateChannelName(prefix string) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+		time.Sleep(time.Nanosecond)
+	}
+	return fmt.Sprintf("%s_%s", prefix, string(b))
 }

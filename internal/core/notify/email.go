@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-type EmailConfig struct {
+// EmailInput 命令行输入的邮件配置
+type EmailInput struct {
+	Name   string
 	To     string
 	From   string
 	Server string
@@ -27,14 +29,15 @@ type EmailNotifier struct {
 	Password string
 }
 
-func NewEmailNotifier(config Config) *EmailNotifier {
+// NewEmailNotifierFromChannel 从渠道配置创建邮件通知器
+func NewEmailNotifierFromChannel(cfg *EmailConfig) *EmailNotifier {
 	return &EmailNotifier{
-		To:       config.EmailTo,
-		From:     config.EmailFrom,
-		Server:   config.SMTPServer,
-		Port:     config.SMTPPort,
-		Username: config.SMTPUser,
-		Password: config.SMTPPass,
+		To:       cfg.To,
+		From:     cfg.From,
+		Server:   cfg.Server,
+		Port:     cfg.Port,
+		Username: cfg.User,
+		Password: cfg.Pass,
 	}
 }
 
@@ -230,26 +233,37 @@ func validateSMTPLine(line string) error {
 	return nil
 }
 
-func configureEmail(input EmailConfig) error {
-	cfg := Config{
-		Enabled:    true,
-		Type:       "email",
-		EmailTo:    input.To,
-		EmailFrom:  input.From,
-		SMTPServer: input.Server,
-		SMTPPort:   input.Port,
-		SMTPUser:   input.User,
-		SMTPPass:   input.Pass,
+func configureEmail(input EmailInput) error {
+	// 测试邮件配置
+	fmt.Println("正在测试邮件配置...")
+	emailCfg := &EmailConfig{
+		To:     input.To,
+		From:   input.From,
+		Server: input.Server,
+		Port:   input.Port,
+		User:   input.User,
+		Pass:   input.Pass,
 	}
 
-	if err := ValidateConfig(&cfg); err != nil {
-		return err
-	}
-
-	notifier := NewEmailNotifier(cfg)
+	notifier := NewEmailNotifierFromChannel(emailCfg)
 	if err := notifier.Test(); err != nil {
-		return fmt.Errorf("email test failed: %v", err)
+		return fmt.Errorf("邮件测试失败: %v", err)
+	}
+	fmt.Println("✓ 测试成功")
+
+	// 如果未指定 name，生成默认名称
+	name := input.Name
+	if name == "" {
+		name = generateChannelName("email")
 	}
 
-	return saveConfig(cfg)
+	// 创建渠道配置
+	channel := ChannelConfig{
+		Name:    name,
+		Enabled: true,
+		Type:    "email",
+		Email:   emailCfg,
+	}
+
+	return addOrUpdateChannel(channel)
 }
