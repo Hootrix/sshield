@@ -1,6 +1,6 @@
 # SSHield
 
-SSHield 是 Linux 服务器加固工具
+SSHield 是 Linux 服务器SSH加固工具
 
 ## 特性
 
@@ -93,6 +93,13 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 {{.Message}}   - 原始日志消息
 {{.HostIP}}   - 主机 IP
 ```
+
+支持`text/template`模板语法:
+
+```
+{{if eq .Type "login_success"}}yellow{{else}}red{{end}}
+```
+
 
 ## systemctl操作和日志查看
 
