@@ -1,9 +1,14 @@
-# SSHield
+<div align="center">
+    <h1>SSHield</h1>
+    <p>
+        SSHield 是 Linux 服务器SSH加固工具
+    </p>
+</div>
 
-SSHield 是 Linux 服务器SSH加固工具
+## note
 
 > [!note]
-> Linux发行版测试覆盖不全，使用时请保持谨慎心态
+> Linux发行版测试覆盖不全，请保持谨慎
 
 ## 特性
 
@@ -108,6 +113,12 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 {{if eq .Type "login_success"}}yellow{{else}}red{{end}}
 ```
 
+### lark 飞书 通知样例
+
+```
+curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"interactive","card":{"header":{"template":"{{if eq .Type \"login_success\"}}yellow{{else}}red{{end}}","title":{"content":"🔐 SSH {{.Type}} Alert @{{.HostIP}}","tag":"plain_text"}},"config":{"wide_screen_mode":true},"elements":[{"tag":"div","text":{"content":"**👤 用户:** {{.User}}@{{.Hostname}}\\n**🔑 方式:** {{.Method}}\\n**🌐 IP:** {{.IP}}\\n**📍 位置:** {{.Location}}\\n**⏰ 时间:** {{.Timestamp}}","tag":"lark_md"}},{"tag":"hr"},{"tag":"div","text":{"content":"**📝 消息:** {{.Message}}\\n**📂 日志:** {{.LogPath}}","tag":"lark_md"}},{"tag":"hr"},{"tag":"note","elements":[{"tag":"plain_text","content":"Powered by SSHield"}]}]}}' https://open.feishu.cn/open-apis/bot/v2/hook/XXXXXXXXX
+```
+![notify-lark](./notify-lark.jpeg)
 
 ## systemctl和日志
 
