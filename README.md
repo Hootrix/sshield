@@ -76,7 +76,9 @@ sshield notify disable --all # 禁用所有通知渠道
 
 
 # 推荐ssh监听服务(systemd service)
-sudo sshield service install
+sudo sshield service install --notify-on success                 # 仅成功提醒，减少打扰
+sudo sshield service install --notify-on all --fail-limit 3 --fail-window 1h  # 通知所有，但限制失败频率：每 IP 每小时最多 3 条
+
 # 启动并设置服务开机自启
 sudo systemctl start sshield-notify
 sudo systemctl enable sshield-notify
@@ -87,15 +89,21 @@ sudo sshield service uninstall
 
 
 # 开启ssh登录监听（手动）
-sshield ssh watch                        # 实时监听 SSH 登录并发送通知
+# 仅成功提醒
+sshield ssh watch --notify-on success
+# 全量提醒，但每 IP 失败每小时最多 3 条
+sshield ssh watch --notify-on all --fail-limit 3 --fail-window 1h
 
 
 # 单次日志扫尾检查
 sshield ssh sweep --since 5m             # 处理最近 5 分钟登录事件（默认仅输出）
-sshield ssh sweep --since 5m --notify    # 同步发送通知
+sshield ssh sweep --since 5m --notify --notify-on success
+sshield ssh sweep --since 5m --notify --notify-on all --fail-limit 3 --fail-window 1h
 
 # 可选参数：--source auto|journal|file，--timezone Asia/Shanghai|Local 等
 # 可选参数：--journal-unit sshd.service --log-path /var/log/auth.log 等
+# 通知过滤：--notify-on all|success|failed
+# 失败限流：--fail-limit N --fail-window 1h/1d/1w/1M 等
 
 ```
 
