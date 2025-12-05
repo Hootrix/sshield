@@ -45,6 +45,7 @@ func (c *CurlNotifier) Send(event LoginEvent) error {
 		"Location":  event.Location,
 		"LogPath":   event.LogPath,
 		"Message":   event.Message,
+		"HostIP":    event.HostIP,
 	}
 
 	resp, err := c.parsedCurl.Execute(data)

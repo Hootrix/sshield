@@ -2,9 +2,11 @@ package notify
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +40,7 @@ func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool)
 			Hostname:  host,
 			Message:   message,
 			Location:  LookupIPLocation(ip),
+			HostIP:    getHostIP(),
 		}, true
 	}
 
@@ -54,6 +57,7 @@ func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool)
 			Hostname:  host,
 			Message:   message,
 			Location:  LookupIPLocation(ip),
+			HostIP:    getHostIP(),
 		}, true
 	}
 
@@ -66,12 +70,13 @@ func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool)
 			Type:      EventLoginFailed,
 			User:      matches[1],
 			IP:        ip,
-			Method:    "preauth", //认证前阶段断开，无法确定具体方式 // "unknown",
+			Method:    "unknown[preauth]", //认证前阶段断开，无法确定具体方式 // "unknown",
 			Port:      port,
 			Timestamp: ts,
 			Hostname:  host,
 			Message:   message,
 			Location:  LookupIPLocation(ip),
+			HostIP:    getHostIP(),
 		}, true
 	}
 
@@ -90,12 +95,13 @@ func parseJournalMessage(message, host string, ts time.Time) (*LoginEvent, bool)
 				Type:      EventLoginFailed,
 				User:      user,
 				IP:        ip,
-				Method:    "preauth", //认证前阶段断开，无法确定具体方式 // "unknown",
+				Method:    "unknown[preauth]", //认证前阶段断开，无法确定具体方式 // "unknown",
 				Port:      port,
 				Timestamp: ts,
 				Hostname:  host,
 				Message:   message,
 				Location:  LookupIPLocation(ip),
+				HostIP:    getHostIP(),
 			}, true
 		}
 	}
@@ -123,6 +129,39 @@ func stripAddress(addr string) string {
 		addr = addr[:idx]
 	}
 	return addr
+}
+
+// 缓存主机 IP，避免每次事件都查询
+var (
+	hostIPOnce   sync.Once
+	cachedHostIP string
+)
+
+// getHostIP 获取当前主机的 IP 地址（优先 IPv4）
+func getHostIP() string {
+	hostIPOnce.Do(func() {
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return
+		}
+		var ipv6 string
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+				if ip4 := ipNet.IP.To4(); ip4 != nil {
+					cachedHostIP = ip4.String()
+					return
+				}
+				if ipv6 == "" && ipNet.IP.To16() != nil {
+					ipv6 = ipNet.IP.String()
+				}
+			}
+		}
+		// 没有 IPv4 则用 IPv6
+		if ipv6 != "" {
+			cachedHostIP = ipv6
+		}
+	})
+	return cachedHostIP
 }
 
 func parseAuthLogLine(line string) (*LoginEvent, bool) {

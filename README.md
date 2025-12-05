@@ -91,6 +91,7 @@ sshield ssh sweep --since 5m --notify    # 同步发送通知
 {{.Location}}  - IP 地理位置
 {{.LogPath}}   - 日志来源路径
 {{.Message}}   - 原始日志消息
+{{.HostIP}}   - 主机 IP
 ```
 
 ## systemctl操作和日志查看

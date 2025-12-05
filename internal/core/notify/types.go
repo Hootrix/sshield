@@ -27,6 +27,7 @@ type LoginEvent struct {
 	Location  string    // IP地理位置（可选）
 	LogPath   string    // 日志来源路径（文件路径或 journald 单元）
 	Message   string    // 原始日志消息
+	HostIP    string    // 当前主机 IP（优先 IPv4）
 }
 
 // Notifier 定义通知接口
