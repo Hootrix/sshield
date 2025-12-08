@@ -25,8 +25,8 @@
 ### 一键安装（推荐）
 
 ```bash
-# 自动检测 安装到 /usr/local/bin
-sudo curl -Lo /usr/local/bin/sshield https://github.com/Hootrix/sshield/releases/latest/download/sshield-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && sudo chmod +x /usr/local/bin/sshield
+# 需要 root 权限执行, 安装到/usr/local/bin/
+curl -Lo /usr/local/bin/sshield https://github.com/Hootrix/sshield/releases/latest/download/sshield-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && chmod +x /usr/local/bin/sshield
 ```
 
 ### 手动下载
